@@ -1,0 +1,15 @@
+{
+  "name": "clawladder",
+  "private": true,
+  "workspaces": ["web", "desktop"],
+  "scripts": {
+    "web:dev": "bun run --cwd web dev",
+    "web:build": "bun run --cwd web build",
+    "server:dev": "cargo run -p server",
+    "server:build": "cargo build -p server --release",
+    "desktop:dev": "bun run web:build && bun run --cwd desktop tauri dev",
+    "desktop:build": "bash build.sh",
+    "dev": "bun run desktop:dev",
+    "build": "bun run desktop:build"
+  }
+}

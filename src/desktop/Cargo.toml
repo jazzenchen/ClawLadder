@@ -1,0 +1,17 @@
+[package]
+name = "desktop"
+version = "0.1.10"
+edition = "2021"
+
+[dependencies]
+clawladder-core = { path = "../core" }
+server = { path = "../server" }
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

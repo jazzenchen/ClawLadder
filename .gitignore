@@ -1,0 +1,42 @@
+# Rust / Cargo
+src/target/
+**/*.rs.bk
+
+# Node / Bun
+node_modules/
+bun.lock
+*.tsbuildinfo
+
+# Vite / Web build
+src/web/dist/
+
+# Tauri generated
+src/desktop/gen/
+
+# Apple signing credentials (NEVER commit)
+src/apple-sign.config
+
+# Cargo.toml backups (build script artifacts)
+*.backup
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDE / AI
+.vscode/
+.claude/
+.idea/
+*.swp
+*.swo
+
+# ClawLadder installer (bundled resource)
+clawladder/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log

@@ -1,0 +1,17 @@
+# Apple Code Signing & Notarization Configuration
+# Copy this file to 'apple-sign.config' and fill in your actual credentials.
+# DO NOT COMMIT 'apple-sign.config' TO GIT.
+
+# --- Code Signing ---
+# The identity as shown in Keychain Access (e.g., "Developer ID Application: Your Name (TEAMID)")
+APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (XXXXXXXXXX)"
+
+# --- Notarization ---
+# Your Apple ID email address
+APPLE_ID="your-apple-id@example.com"
+
+# App-specific password generated at appleid.apple.com
+APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+
+# Your 10-character Team ID (found in Apple Developer portal)
+APPLE_TEAM_ID="XXXXXXXXXX"

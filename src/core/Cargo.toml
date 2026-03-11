@@ -1,0 +1,16 @@
+[package]
+name = "clawladder-core"
+version = "0.1.10"
+edition = "2021"
+
+[dependencies]
+portable-pty = "0.9"
+tokio = { version = "1", features = ["process", "io-util", "sync", "rt-multi-thread", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+dashmap = "6"
+bytes = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+dirs = "6"

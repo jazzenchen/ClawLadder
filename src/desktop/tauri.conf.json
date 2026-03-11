@@ -1,0 +1,38 @@
+{
+  "productName": "ClawLadder",
+  "version": "0.1.10",
+  "identifier": "com.clawladder.app",
+  "build": {
+    "frontendDist": "../web/dist",
+    "beforeBuildCommand": "bun run --cwd ../web build",
+    "beforeDevCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ClawLadder",
+        "width": 960,
+        "height": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "url": "http://127.0.0.1:3145"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "resources": {
+      "../web/dist": "web/dist",
+      "../../clawladder/install.sh": "clawladder/install.sh"
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}
