@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "clawladder-core"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "bytes",
  "dashmap",
@@ -649,9 +649,10 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "clawladder-core",
+ "open",
  "serde",
  "serde_json",
  "server",
@@ -3304,13 +3305,14 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "axum",
  "bytes",
  "clawladder-core",
  "dashmap",
  "futures-util",
+ "open",
  "serde",
  "serde_json",
  "tokio",

@@ -1,19 +1,21 @@
 {
   "productName": "ClawLadder",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "identifier": "com.clawladder.app",
   "build": {
     "frontendDist": "../web/dist",
     "beforeBuildCommand": "bun run --cwd ../web build",
-    "beforeDevCommand": ""
+    "beforeDevCommand": "bun run --cwd ../web dev",
+    "devUrl": "http://localhost:5173"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
         "title": "ClawLadder",
-        "width": 960,
-        "height": 640,
+        "width": 720,
+        "height": 1080,
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
@@ -27,7 +29,7 @@
   "bundle": {
     "resources": {
       "../web/dist": "web/dist",
-      "../../clawladder/install.sh": "clawladder/install.sh"
+      "../../openclaw/install.sh": "clawladder/install.sh"
     }
   },
   "plugins": {

@@ -27,6 +27,9 @@ src/apple-sign.config
 .vscode/
 .claude/
 .idea/
+.specstory/
+.cursor/
+.cursorindexingignore
 *.swp
 *.swo
 

@@ -3,6 +3,11 @@
 use clawladder_core::logger::Logger;
 use std::path::PathBuf;
 
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| e.to_string())
+}
+
 fn main() {
     // Init logger first — everything from here on gets logged.
     let logger = Logger::init().expect("Failed to initialize logger");
@@ -23,6 +28,7 @@ fn main() {
     // Run Tauri app (blocks until window closes)
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![open_url])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 

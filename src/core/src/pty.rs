@@ -59,37 +59,7 @@ pub fn spawn_pty_cmd(program: &str, args: &[&str]) -> Result<
 }
 
 fn inherit_env(cmd: &mut CommandBuilder) {
-    if let Ok(home) = std::env::var("HOME") {
-        cmd.env("HOME", home.clone());
-
-        // On macOS, GUI apps inherit a minimal PATH from launchd that lacks
-        // Homebrew, user-local bins, etc.  Build a rich PATH so that child
-        // processes (install scripts, status checks) can find tools like
-        // brew, node, openclaw, etc.
-        let base_path = std::env::var("PATH").unwrap_or_default();
-        let extra_dirs = [
-            "/opt/homebrew/bin",
-            "/opt/homebrew/sbin",
-            "/usr/local/bin",
-            "/usr/local/sbin",
-            &format!("{}/.local/bin", home),
-            &format!("{}/.cargo/bin", home),
-        ];
-        let mut parts: Vec<&str> = Vec::new();
-        for dir in &extra_dirs {
-            if !base_path.split(':').any(|p| p == *dir) {
-                parts.push(dir);
-            }
-        }
-        if !base_path.is_empty() {
-            parts.push(&base_path);
-        }
-        cmd.env("PATH", parts.join(":"));
-    } else {
-        if let Ok(path) = std::env::var("PATH") {
-            cmd.env("PATH", path);
-        }
-    }
+    crate::path_utils::apply_rich_env_pty(cmd);
 }
 
 fn spawn_pty_with_cmd(cmd: CommandBuilder) -> Result<

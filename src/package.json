@@ -7,7 +7,7 @@
     "web:build": "bun run --cwd web build",
     "server:dev": "cargo run -p server",
     "server:build": "cargo build -p server --release",
-    "desktop:dev": "bun run web:build && bun run --cwd desktop tauri dev",
+    "desktop:dev": "bun run --cwd desktop tauri dev",
     "desktop:build": "bash build.sh",
     "dev": "bun run desktop:dev",
     "build": "bun run desktop:build"
