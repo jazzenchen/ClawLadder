@@ -1,10 +1,18 @@
 // Step 5: Confirm & Launch — runs onboard, merges config, starts gateway
 import { useState, useCallback } from "react";
+import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Badge } from "../ui/badge";
 import { ScrollArea } from "../ui/scroll-area";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "../ui/dialog";
 
 import {
   runOnboard,
@@ -15,8 +23,8 @@ import {
   fetchGatewayUrl,
 } from "../../lib/api";
 
-import type { ModelsConfig, ProviderEntry } from "./StepModels";
-import type { ChannelsConfig } from "./StepChannels";
+import type { ProviderEntry } from "./StepModels";
+import { useOnboardingStore } from "../../stores/onboarding";
 
 // Re-export the metadata lookup so we can use it here
 import { getProviderMeta } from "./StepModels";
@@ -24,8 +32,6 @@ import { getProviderMeta } from "./StepModels";
 // ── Props ──────────────────────────────────────────────────────────────────
 
 interface Props {
-  models: ModelsConfig;
-  channels: ChannelsConfig;
   onBack: () => void;
   onComplete: () => void;
 }
@@ -48,12 +54,15 @@ function providerKey(p: ProviderEntry): string {
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function StepLaunch({ models, channels, onBack, onComplete }: Props) {
+export function StepLaunch({ onBack, onComplete }: Props) {
+  const models = useOnboardingStore((s) => s.modelsConfig);
+  const channels = useOnboardingStore((s) => s.channelsConfig);
   const [status, setStatus] = useState("");
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [dashboardUrl, setDashboardUrl] = useState("");
+  const [showDialog, setShowDialog] = useState(false);
 
   const defaultProvider = models.providers.find(
     (p) => p.id === models.defaultProvider && p.enabled,
@@ -61,6 +70,7 @@ export function StepLaunch({ models, channels, onBack, onComplete }: Props) {
   const { feishu, telegram } = channels;
 
   const handleLaunch = useCallback(async () => {
+    setShowDialog(true);
     setLaunching(true);
     setError("");
     try {
@@ -151,7 +161,7 @@ export function StepLaunch({ models, channels, onBack, onComplete }: Props) {
             entry.models = [
               {
                 id: p.selectedModel,
-                name: `${p.selectedModel} (${p.label || key})`,
+                name: p.customModelName || `${p.selectedModel} (${p.label || key})`,
                 reasoning: false,
                 input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -362,9 +372,9 @@ export function StepLaunch({ models, channels, onBack, onComplete }: Props) {
       {/* Status area */}
       {(status || error) && (
         <Card
-          className={`shrink-0 ${error ? "border border-destructive" : "border border-border"}`}
+          className={`mx-4 mb-4 shrink-0 ${error ? "border border-destructive" : "border border-border"}`}
         >
-          <CardContent className="py-3">
+          <CardContent>
             {error ? (
               <p className="text-sm text-destructive">{error}</p>
             ) : (
@@ -379,7 +389,7 @@ export function StepLaunch({ models, channels, onBack, onComplete }: Props) {
           ← 上一步
         </Button>
         {done ? (
-          <Button onClick={onComplete}>打开 Dashboard →</Button>
+          <Button onClick={onComplete}>完成配置 →</Button>
         ) : (
           <Button onClick={handleLaunch} disabled={launching}>
             {launching ? "启动中…" : "🚀 启动 OpenClaw"}

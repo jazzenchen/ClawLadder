@@ -114,7 +114,7 @@ html, body, #root {
   --muted-foreground: oklch(0.6268 0 0);
   --accent: oklch(0.3211 0 0);
   --accent-foreground: oklch(0.9600 0 0);
-  --destructive: oklch(0.5940 0.0443 196.0233);
+  --destructive: oklch(0.6368 0.2078 25.3313);
   --destructive-foreground: oklch(0.1797 0.0043 308.1928);
   --border: oklch(0.2520 0 0);
   --input: oklch(0.2520 0 0);
@@ -202,4 +202,45 @@ html, body, #root {
     @apply bg-background text-foreground;
     letter-spacing: var(--tracking-normal);
   }
+}
+
+/* Page transition animation */
+.page-transition {
+  animation: page-fade-in 0.4s ease-out;
+}
+
+@keyframes page-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Install button glow effect */
+.install-btn {
+  box-shadow: 0 0 16px 0 oklch(0.7214 0.1337 49.9802 / 0.25);
+  transition: box-shadow 0.3s ease, background-color 0.2s ease;
+}
+.install-btn:hover {
+  box-shadow: 0 0 28px 4px oklch(0.7214 0.1337 49.9802 / 0.45),
+              0 0 8px 0 oklch(0.7214 0.1337 49.9802 / 0.3);
+}
+
+/* Custom scrollbar for install logs */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: oklch(0.4 0 0 / 0.4);
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0 0 / 0.5);
 }

@@ -11,29 +11,11 @@ export interface StatusInfo {
   version?: string;
   configured: boolean;
   running: boolean;
-  clawladder_status?: string | null; // null = no config file, "none" = config exists but no ClawLadder key, "installed", "configured"
 }
 
 export async function fetchStatus(): Promise<StatusInfo> {
   const res = await fetch(`${BASE}/api/status`);
   if (!res.ok) throw new Error("Failed to fetch status");
-  return res.json();
-}
-
-// ---------------------------------------------------------------------------
-// ClawLadder status
-// ---------------------------------------------------------------------------
-
-export async function setClawLadderStatus(status: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`${BASE}/api/clawladder/status`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Failed to set ClawLadder status");
-  }
   return res.json();
 }
 
@@ -139,6 +121,15 @@ export async function gatewayUninstall(): Promise<{ ok: boolean; message: string
   return res.json();
 }
 
+export async function gatewayOpenDashboard(): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`${BASE}/api/gateway/open-dashboard`, { method: "POST" });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text);
+  }
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Install (existing)
 // ---------------------------------------------------------------------------
@@ -217,6 +208,19 @@ export async function configSet(path: string, value: string): Promise<{ ok: bool
 }
 
 // ---------------------------------------------------------------------------
+// Doctor
+// ---------------------------------------------------------------------------
+
+export async function runDoctor(): Promise<{ ok: boolean; output: string; exit_code?: number }> {
+  const res = await fetch(`${BASE}/api/doctor`, { method: "POST" });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Doctor failed");
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Models / Providers
 // ---------------------------------------------------------------------------
 
@@ -254,18 +258,76 @@ export async function fetchProviders(): Promise<ProvidersResponse> {
 // Skills
 // ---------------------------------------------------------------------------
 
+export interface SkillInfo {
+  name: string;
+  description?: string;
+  emoji?: string;
+  eligible: boolean;
+  disabled: boolean;
+  source: string;
+  bundled: boolean;
+}
+
 export interface SkillsResponse {
+  skills: SkillInfo[];
+  /** Legacy fields kept for backward compat */
   summary?: { total: number; eligible: number; disabled: number; blocked: number; missingRequirements: number };
-  eligible: string[];
-  disabled: string[];
-  blocked: string[];
-  /** API returns missing as object { bins?, config?, env? }; legacy or fallback may be string[] */
-  missingRequirements: { name: string; missing: string[] | { bins?: string[]; config?: string[]; env?: string[] } }[];
+  eligible?: string[];
 }
 
 export async function fetchSkills(): Promise<SkillsResponse> {
   const res = await fetch(`${BASE}/api/skills/list`);
   if (!res.ok) throw new Error("Failed to fetch skills");
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// ClawHub
+// ---------------------------------------------------------------------------
+
+export interface ClawHubStatus {
+  installed: boolean;
+  version?: string;
+}
+
+export async function fetchClawHubStatus(): Promise<ClawHubStatus> {
+  const res = await fetch(`${BASE}/api/clawhub/status`);
+  if (!res.ok) throw new Error("Failed to check clawhub status");
+  return res.json();
+}
+
+export async function installClawHub(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${BASE}/api/clawhub/install`, { method: "POST" });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Failed to install clawhub");
+  }
+  return res.json();
+}
+
+export async function installClawHubSkill(url: string): Promise<{ ok: boolean; output?: string }> {
+  const res = await fetch(`${BASE}/api/clawhub/skill-install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Failed to install skill");
+  }
+  return res.json();
+}
+
+export async function uninstallClawHubSkill(slug: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${BASE}/api/clawhub/skill-uninstall`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Failed to uninstall skill");
+  }
   return res.json();
 }
 
@@ -350,6 +412,128 @@ export interface AuthStatusResponse {
 export async function modelsAuthStatus(provider: string): Promise<AuthStatusResponse> {
   const res = await fetch(`${BASE}/api/models/auth/status?provider=${encodeURIComponent(provider)}`);
   if (!res.ok) throw new Error("Auth status check failed");
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// OpenClaw Status (token usage, sessions, agents)
+// ---------------------------------------------------------------------------
+
+export interface OpenClawSession {
+  agentId: string;
+  key: string;
+  kind: string;
+  sessionId: string;
+  updatedAt: number;
+  age: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheRead: number;
+  cacheWrite: number;
+  model: string;
+  contextTokens: number;
+  flags: string[];
+}
+
+export interface OpenClawAgent {
+  id: string;
+  workspaceDir: string;
+  bootstrapPending: boolean;
+  sessionsCount: number;
+  lastUpdatedAt: number | null;
+  lastActiveAgeMs: number | null;
+}
+
+export interface OpenClawStatus {
+  runtimeVersion: string;
+  sessions: {
+    count: number;
+    defaults: { model: string; contextTokens: number };
+    recent: OpenClawSession[];
+  };
+  agents: {
+    defaultId: string;
+    agents: OpenClawAgent[];
+    totalSessions: number;
+  };
+  gateway: {
+    mode: string;
+    url: string;
+    reachable: boolean;
+    connectLatencyMs: number;
+    self?: { host: string; version: string; platform: string };
+  };
+  gatewayService: {
+    installed: boolean;
+    runtimeShort: string;
+  };
+  channelSummary: string[];
+  securityAudit: {
+    summary: { critical: number; warn: number; info: number };
+  };
+  memory: {
+    files: number;
+    chunks: number;
+    backend: string;
+  };
+  usage: {
+    providers: unknown[];
+  };
+}
+
+export async function fetchOpenClawStatus(): Promise<OpenClawStatus> {
+  const res = await fetch(`${BASE}/api/openclaw/status`);
+  if (!res.ok) throw new Error("Failed to fetch OpenClaw status");
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Usage Stats (JSONL scan)
+// ---------------------------------------------------------------------------
+
+export interface DailyUsage {
+  date: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_read: number;
+  cache_write: number;
+  cost: number;
+  requests: number;
+}
+
+export interface GroupedUsage {
+  key: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost: number;
+  requests: number;
+}
+
+export interface UsageTotals {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_read: number;
+  cache_write: number;
+  cost: number;
+  requests: number;
+  sessions_scanned: number;
+  days: number;
+}
+
+export interface UsageStats {
+  daily: DailyUsage[];
+  by_agent: GroupedUsage[];
+  by_provider: GroupedUsage[];
+  by_model: GroupedUsage[];
+  totals: UsageTotals;
+}
+
+export async function fetchUsageStats(days: number = 30): Promise<UsageStats> {
+  const res = await fetch(`${BASE}/api/usage?days=${days}`);
+  if (!res.ok) throw new Error("Failed to fetch usage stats");
   return res.json();
 }
 

@@ -14,6 +14,8 @@ import {
   SelectValue,
 } from "../ui/select";
 
+import { useOnboardingStore } from "../../stores/onboarding";
+
 // ── Exported state shape ───────────────────────────────────────────────────
 
 export interface FeishuConfig {
@@ -59,15 +61,15 @@ export const defaultChannelsConfig: ChannelsConfig = {
 // ── Props ──────────────────────────────────────────────────────────────────
 
 interface Props {
-  value: ChannelsConfig;
-  onChange: (v: ChannelsConfig) => void;
   onNext: () => void;
   onBack: () => void;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function StepChannels({ value, onChange, onNext, onBack }: Props) {
+export function StepChannels({ onNext, onBack }: Props) {
+  const value = useOnboardingStore((s) => s.channelsConfig);
+  const onChange = useOnboardingStore((s) => s.setChannelsConfig);
   const { feishu, telegram } = value;
 
   const updateFeishu = (patch: Partial<FeishuConfig>) =>

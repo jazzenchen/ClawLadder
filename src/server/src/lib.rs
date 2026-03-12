@@ -13,6 +13,7 @@ use clawladder_core::gateway;
 use clawladder_core::logger::Logger;
 use clawladder_core::pty;
 use clawladder_core::session::*;
+use clawladder_core::usage;
 use serde::Deserialize;
 use std::io::Write;
 use std::path::PathBuf;
@@ -59,17 +60,29 @@ pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) {
         .route("/api/gateway/restart", post(gateway_restart_handler))
         .route("/api/gateway/stop", post(gateway_stop_handler))
         .route("/api/gateway/uninstall", post(gateway_uninstall_handler))
+        .route("/api/gateway/open-dashboard", post(gateway_open_dashboard_handler))
         // Onboarding: run `openclaw onboard` with flags
         .route("/api/onboard", post(run_onboard_handler))
+        // Doctor
+        .route("/api/doctor", post(run_doctor_handler))
+        // OpenClaw status (token usage, sessions, agents)
+        .route("/api/openclaw/status", get(openclaw_status_handler))
         // Skills & Hooks
         .route("/api/skills/list", get(list_skills_handler))
         .route("/api/hooks/list", get(list_hooks_handler))
         .route("/api/hooks/enable", post(hook_enable_handler))
         .route("/api/hooks/disable", post(hook_disable_handler))
+        // ClawHub
+        .route("/api/clawhub/status", get(clawhub_status_handler))
+        .route("/api/clawhub/install", post(clawhub_install_handler))
+        .route("/api/clawhub/skill-install", post(clawhub_skill_install_handler))
+        .route("/api/clawhub/skill-uninstall", post(clawhub_skill_uninstall_handler))
         // Auth: OAuth / plugin login
         .route("/api/models/auth/login", post(models_auth_login_handler))
         .route("/api/models/auth/status", get(models_auth_status_handler))
         .route("/api/plugins/enable", post(plugins_enable_handler))
+        // Usage stats (JSONL scan)
+        .route("/api/usage", get(usage_stats_handler))
         // WebSocket
         .route("/ws", get(ws_handler))
         .with_state(state)
@@ -168,11 +181,12 @@ async fn sudo_validate(
 /// Check if ClawLadder is installed and/or running.
 async fn check_status() -> Json<serde_json::Value> {
     let (installed, version) = tokio::task::spawn_blocking(|| {
-        // Use a login shell so that the user's PATH (from .bashrc/.zshrc/etc.)
-        // is loaded — openclaw may have been installed to a directory not in
-        // the server process's inherited PATH.
-        let mut cmd = std::process::Command::new("bash");
-        cmd.args(["-lc", "openclaw --version"]);
+        // 1. Try the resolved binary path (saved or probed via $SHELL)
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let shell = clawladder_core::path_utils::user_shell();
+        let cmd_str = format!("{} --version", bin);
+        let mut cmd = std::process::Command::new(&shell);
+        cmd.args(["-lc", &cmd_str]);
         clawladder_core::path_utils::apply_rich_env(&mut cmd);
         match cmd.output() {
             Ok(o) if o.status.success() => {
@@ -185,43 +199,14 @@ async fn check_status() -> Json<serde_json::Value> {
     .await
     .unwrap_or((false, None));
 
-    // Check ClawLadder status from ~/.openclaw/clawladder.json
-    // Possible values: null (no clawladder.json), "none" (openclaw.json exists but no clawladder.json),
-    // "installed" (install+onboard done), "configured" (wizard completed)
-    let (configured, clawladder_status) = tokio::task::spawn_blocking(|| {
+    // Check if openclaw.json exists (= configured)
+    let configured = tokio::task::spawn_blocking(|| {
         let home = std::env::var("HOME").unwrap_or_default();
         let openclaw_config = format!("{}/.openclaw/openclaw.json", home);
-        let clawladder_config = format!("{}/.openclaw/clawladder.json", home);
-
-        // First check if openclaw.json exists at all
-        let openclaw_exists = std::fs::metadata(&openclaw_config).is_ok();
-
-        match std::fs::read_to_string(&clawladder_config) {
-            Ok(contents) => {
-                match serde_json::from_str::<serde_json::Value>(&contents) {
-                    Ok(val) => {
-                        let cl_status = val.get("status")
-                            .and_then(|s| s.as_str())
-                            .map(|s| s.to_string());
-                        let configured = cl_status.as_deref() == Some("configured");
-                        let status_str = cl_status.unwrap_or_else(|| "none".to_string());
-                        (configured, Some(status_str))
-                    }
-                    Err(_) => (false, if openclaw_exists { Some("none".to_string()) } else { None }),
-                }
-            }
-            Err(_) => {
-                // No clawladder.json — check if openclaw.json exists
-                if openclaw_exists {
-                    (false, Some("none".to_string()))
-                } else {
-                    (false, None)
-                }
-            }
-        }
+        std::fs::metadata(&openclaw_config).is_ok()
     })
     .await
-    .unwrap_or((false, None));
+    .unwrap_or(false);
 
     let running = tokio::task::spawn_blocking(|| {
         std::process::Command::new("pgrep")
@@ -234,13 +219,12 @@ async fn check_status() -> Json<serde_json::Value> {
     .await
     .unwrap_or(false);
 
-    tracing::info!(installed = installed, configured = configured, running = running, ?clawladder_status, "Status check");
+    tracing::info!(installed = installed, configured = configured, running = running, "Status check");
     Json(serde_json::json!({
         "installed": installed,
         "version": version,
         "configured": configured,
         "running": running,
-        "clawladder_status": clawladder_status,
     }))
 }
 
@@ -302,7 +286,7 @@ async fn start_install_homebrew(
     let askpass_str = askpass_path.to_string_lossy().to_string();
     let verbose_env = if body.verbose { " OPENCLAW_VERBOSE=1" } else { "" };
     let cmd = format!(
-        "export SUDO_ASKPASS={} NONINTERACTIVE=1{} && sudo -A -v && bash {} --no-prompt --npm --no-onboard; rm -f {}",
+        "export SUDO_ASKPASS={} NONINTERACTIVE=1{} && sudo -A -v && bash {} --no-prompt --npm --no-onboard; OPENCLAW_BIN=\"$(which openclaw 2>/dev/null)\"; echo \"OPENCLAW_BIN=$OPENCLAW_BIN\"; rm -f {}",
         shell_escape(&askpass_str),
         verbose_env,
         shell_escape(&script_str),
@@ -354,6 +338,10 @@ echo "==> Verifying installation..."
 export PATH="$NVM_DIR/versions/node/$(nvm current)/bin:$PATH"
 openclaw --version
 
+echo "==> Recording binary path..."
+OPENCLAW_BIN="$(which openclaw)"
+echo "OPENCLAW_BIN=$OPENCLAW_BIN"
+
 echo "==> Done!"
 "#,
         verbose = verbose_flag,
@@ -392,15 +380,42 @@ async fn spawn_install_session(
     state.registry.insert(session_id, ctx);
 
     // Ghost reader: PTY output → buffer + broadcast + log
+    // Also intercepts "OPENCLAW_BIN=/path/to/openclaw" to persist the binary path.
     let registry_clone = state.registry.clone();
     let logger = state.logger.clone();
     let sid = session_id;
     let needs_sudo_cleanup = with_sudo_keepalive;
     tokio::spawn(async move {
+        let mut accumulated = String::new();
         while let Some(data) = pty_rx.recv().await {
             logger.pty(&data);
             buffer.push(&data);
-            let _ = live_tx.send(Bytes::from(data));
+            let _ = live_tx.send(Bytes::from(data.clone()));
+
+            // Accumulate text to scan for OPENCLAW_BIN= marker
+            if let Ok(text) = std::str::from_utf8(&data) {
+                accumulated.push_str(text);
+                // Check for the marker line
+                if let Some(pos) = accumulated.find("OPENCLAW_BIN=") {
+                    let rest = &accumulated[pos + "OPENCLAW_BIN=".len()..];
+                    // Extract until newline or end of buffer
+                    let end = rest.find('\n')
+                        .or_else(|| rest.find('\r'))
+                        .unwrap_or(rest.len());
+                    let bin_path = rest[..end].trim().to_string();
+                    if !bin_path.is_empty() {
+                        tracing::info!(path = %bin_path, "Captured openclaw binary path from install");
+                        let _ = clawladder_core::path_utils::save_bin_path(&bin_path);
+                    }
+                    // Stop accumulating — we found what we need
+                    accumulated.clear();
+                }
+                // Prevent unbounded growth (keep last 1KB)
+                if accumulated.len() > 1024 {
+                    let drain = accumulated.len() - 512;
+                    accumulated.drain(..drain);
+                }
+            }
         }
         let exit_code = registry_clone
             .get(&sid)
@@ -726,16 +741,11 @@ async fn get_gateway_url() -> Json<serde_json::Value> {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let http_url = if token.is_empty() {
-            format!("http://127.0.0.1:{}", port)
-        } else {
-            format!("http://127.0.0.1:{}/?token={}", port, token)
-        };
-        let ws_url = if token.is_empty() {
-            format!("ws://127.0.0.1:{}", port)
-        } else {
-            format!("ws://127.0.0.1:{}/?token={}", port, token)
-        };
+        // Note: OpenClaw dashboard uses device-token auth via WebSocket handshake,
+        // NOT query-param tokens. The httpUrl is plain; use `openclaw dashboard` to open
+        // with proper auth. We still return the token for display/copy purposes.
+        let http_url = format!("http://127.0.0.1:{}", port);
+        let ws_url = format!("ws://127.0.0.1:{}", port);
 
         serde_json::json!({
             "httpUrl": http_url,
@@ -748,6 +758,37 @@ async fn get_gateway_url() -> Json<serde_json::Value> {
     .unwrap_or(serde_json::json!({}));
 
     Json(result)
+}
+
+/// POST /api/gateway/open-dashboard — run `openclaw dashboard` to open the Control UI with auth
+async fn gateway_open_dashboard_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| {
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let cmd_str = format!("{} dashboard", bin);
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
+        cmd.args(["-lc", &cmd_str]);
+        clawladder_core::path_utils::apply_rich_env(&mut cmd);
+        match cmd.output() {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                if out.status.success() {
+                    Ok(stdout)
+                } else {
+                    Err(if stderr.is_empty() { stdout } else { stderr })
+                }
+            }
+            Err(e) => Err(format!("Failed to run openclaw dashboard: {}", e)),
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+
+    match result {
+        Ok(msg) => Ok(Json(serde_json::json!({ "ok": true, "message": msg }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
 }
 
 /// POST /api/gateway/install — register gateway as system service
@@ -946,11 +987,12 @@ async fn run_onboard_handler(
 
     args.push("--json".to_string());
 
-    let cmd_str = format!("openclaw {}", args.join(" "));
+    let cmd_str = format!("{} {}", clawladder_core::path_utils::resolve_openclaw_bin(), args.join(" "));
     tracing::info!(cmd = %cmd_str, "Running onboard");
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new("bash");
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
         cmd.args(["-lc", &cmd_str]);
         clawladder_core::path_utils::apply_rich_env(&mut cmd);
         match cmd.output() {
@@ -987,6 +1029,53 @@ async fn run_onboard_handler(
 }
 
 // ---------------------------------------------------------------------------
+// Doctor: run `openclaw doctor --repair --non-interactive`
+// ---------------------------------------------------------------------------
+
+/// POST /api/doctor — run `openclaw doctor` with repair flags
+async fn run_doctor_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    tracing::info!("Doctor requested");
+
+    let result = tokio::task::spawn_blocking(|| {
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let cmd_str = format!("{} doctor --repair --non-interactive", bin);
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
+        cmd.args(["-lc", &cmd_str]);
+        clawladder_core::path_utils::apply_rich_env(&mut cmd);
+        match cmd.output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                if output.status.success() {
+                    Ok(serde_json::json!({ "ok": true, "output": stdout }))
+                } else {
+                    Ok(serde_json::json!({
+                        "ok": false,
+                        "output": format!("{}{}", stdout, stderr),
+                        "exit_code": output.status.code(),
+                    }))
+                }
+            }
+            Err(e) => Err(format!("Failed to run openclaw doctor: {}", e)),
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join error: {}", e)))?;
+
+    match result {
+        Ok(val) => {
+            tracing::info!("Doctor completed");
+            Ok(Json(val))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Doctor failed");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, e))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Config set: run `openclaw config set <path> <value>`
 // ---------------------------------------------------------------------------
 
@@ -1000,15 +1089,18 @@ struct ConfigSetRequest {
 async fn config_set_handler(
     Json(body): Json<ConfigSetRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let bin = clawladder_core::path_utils::resolve_openclaw_bin();
     let cmd_str = format!(
-        "openclaw config set {} {}",
+        "{} config set {} {}",
+        bin,
         shell_escape(&body.path),
         shell_escape(&body.value)
     );
     tracing::info!(cmd = %cmd_str, "Config set");
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new("bash");
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
         cmd.args(["-lc", &cmd_str]);
         clawladder_core::path_utils::apply_rich_env(&mut cmd);
         match cmd.output() {
@@ -1041,8 +1133,11 @@ async fn config_set_handler(
 async fn list_providers_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let result = tokio::task::spawn_blocking(|| {
-        let mut cmd = std::process::Command::new("bash");
-        cmd.args(["-lc", "openclaw models list --all --json"]);
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let cmd_str = format!("{} models list --all --json", bin);
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
+        cmd.args(["-lc", &cmd_str]);
         clawladder_core::path_utils::apply_rich_env(&mut cmd);
         match cmd.output() {
             Ok(output) if output.status.success() => {
@@ -1125,11 +1220,13 @@ async fn list_models_handler(
     let provider_filter = query.get("provider").cloned();
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut cmd_str = "openclaw models list --all --json".to_string();
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let mut cmd_str = format!("{} models list --all --json", bin);
         if let Some(ref p) = provider_filter {
             cmd_str.push_str(&format!(" --provider {}", shell_escape(p)));
         }
-        let mut cmd = std::process::Command::new("bash");
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
         cmd.args(["-lc", &cmd_str]);
         clawladder_core::path_utils::apply_rich_env(&mut cmd);
         match cmd.output() {
@@ -1191,10 +1288,23 @@ fn provider_display_name(id: &str) -> &str {
 // Skills & Hooks
 // ---------------------------------------------------------------------------
 
+/// GET /api/openclaw/status — full OpenClaw status with usage data
+async fn openclaw_status_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| run_openclaw_json("status --usage --json"))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
 /// Helper: run an openclaw CLI command and return parsed JSON
 fn run_openclaw_json(args: &str) -> Result<serde_json::Value, String> {
-    let cmd_str = format!("openclaw {}", args);
-    let mut cmd = std::process::Command::new("bash");
+    let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+    let cmd_str = format!("{} {}", bin, args);
+    let shell = clawladder_core::path_utils::user_shell();
+    let mut cmd = std::process::Command::new(&shell);
     cmd.args(["-lc", &cmd_str]);
     clawladder_core::path_utils::apply_rich_env(&mut cmd);
     match cmd.output() {
@@ -1216,9 +1326,9 @@ fn run_openclaw_json(args: &str) -> Result<serde_json::Value, String> {
     }
 }
 
-/// GET /api/skills/list
+/// GET /api/skills/list — returns eligible skills with descriptions
 async fn list_skills_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let result = tokio::task::spawn_blocking(|| run_openclaw_json("skills check --json"))
+    let result = tokio::task::spawn_blocking(|| run_openclaw_json("skills list --eligible --json"))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
     match result {
@@ -1249,8 +1359,10 @@ async fn hook_enable_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let name = body.name;
     let result = tokio::task::spawn_blocking(move || {
-        let cmd_str = format!("openclaw hooks enable {}", shell_escape(&name));
-        let mut cmd = std::process::Command::new("bash");
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let cmd_str = format!("{} hooks enable {}", bin, shell_escape(&name));
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
         cmd.args(["-lc", &cmd_str]);
         clawladder_core::path_utils::apply_rich_env(&mut cmd);
         match cmd.output() {
@@ -1273,8 +1385,10 @@ async fn hook_disable_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let name = body.name;
     let result = tokio::task::spawn_blocking(move || {
-        let cmd_str = format!("openclaw hooks disable {}", shell_escape(&name));
-        let mut cmd = std::process::Command::new("bash");
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let cmd_str = format!("{} hooks disable {}", bin, shell_escape(&name));
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
         cmd.args(["-lc", &cmd_str]);
         clawladder_core::path_utils::apply_rich_env(&mut cmd);
         match cmd.output() {
@@ -1287,6 +1401,137 @@ async fn hook_disable_handler(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
     match result {
         Ok(()) => Ok(Json(serde_json::json!({ "ok": true }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ClawHub: install clawhub CLI + install skills from clawhub
+// ---------------------------------------------------------------------------
+
+/// GET /api/clawhub/status — check if clawhub CLI is installed
+async fn clawhub_status_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| {
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
+        cmd.args(["-lc", "clawhub --version"]);
+        clawladder_core::path_utils::apply_rich_env(&mut cmd);
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                Ok(serde_json::json!({ "installed": true, "version": version }))
+            }
+            _ => Ok(serde_json::json!({ "installed": false })),
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+/// POST /api/clawhub/install — install clawhub via npm i -g clawhub
+async fn clawhub_install_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| {
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
+        cmd.args(["-lc", "npm install -g clawhub"]);
+        clawladder_core::path_utils::apply_rich_env(&mut cmd);
+        match cmd.output() {
+            Ok(output) if output.status.success() => Ok(()),
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                Err(format!("npm install failed: {}{}", stderr, if stderr.is_empty() { &stdout } else { "" }))
+            }
+            Err(e) => Err(format!("Failed to run npm: {}", e)),
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(()) => Ok(Json(serde_json::json!({ "ok": true }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ClawHubSkillInstallRequest {
+    url: String,
+}
+
+/// POST /api/clawhub/skill-install — install a skill from clawhub URL
+async fn clawhub_skill_install_handler(
+    Json(body): Json<ClawHubSkillInstallRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let url = body.url;
+    let result = tokio::task::spawn_blocking(move || {
+        let cmd_str = format!("clawhub install {}", shell_escape(&url));
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
+        cmd.args(["-lc", &cmd_str]);
+        clawladder_core::path_utils::apply_rich_env(&mut cmd);
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                Ok(serde_json::json!({ "ok": true, "output": stdout }))
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                Err(format!("clawhub install failed: {}{}", stderr, if stderr.is_empty() { &stdout } else { "" }))
+            }
+            Err(e) => Err(format!("Failed to run clawhub: {}", e)),
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ClawHubSkillUninstallRequest {
+    slug: String,
+}
+
+/// POST /api/clawhub/skill-uninstall — uninstall a skill via clawhub
+async fn clawhub_skill_uninstall_handler(
+    Json(body): Json<ClawHubSkillUninstallRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let slug = body.slug;
+    let result = tokio::task::spawn_blocking(move || {
+        let cmd_str = format!("clawhub uninstall {} --yes", shell_escape(&slug));
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
+        cmd.args(["-lc", &cmd_str]);
+        clawladder_core::path_utils::apply_rich_env(&mut cmd);
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                Ok(serde_json::json!({ "ok": true }))
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let msg = format!("{}{}", stderr, if stderr.is_empty() { &stdout } else { "" });
+                // "not found" / "not installed" is not a real error
+                if msg.to_lowercase().contains("not found") || msg.to_lowercase().contains("not installed") {
+                    Ok(serde_json::json!({ "ok": true, "skipped": true }))
+                } else {
+                    Err(format!("clawhub uninstall failed: {}", msg))
+                }
+            }
+            Err(e) => Err(format!("Failed to run clawhub: {}", e)),
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
     }
 }
@@ -1320,20 +1565,24 @@ async fn models_auth_login_handler(
     let needs_browser = setup_token.is_none() && auth_choice.is_none();
 
     let result = tokio::task::spawn_blocking(move || {
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
         let cmd_str = if let Some(token) = &setup_token {
             format!(
-                "openclaw models auth setup-token --provider {} --token {}",
+                "{} models auth setup-token --provider {} --token {}",
+                bin,
                 shell_escape(&provider),
                 shell_escape(token)
             )
         } else if let Some(choice) = &auth_choice {
             format!(
-                "openclaw onboard --non-interactive --mode local --auth-choice {} --skip-channels --skip-skills --skip-search --skip-health --skip-ui",
+                "{} onboard --non-interactive --mode local --auth-choice {} --skip-channels --skip-skills --skip-search --skip-health --skip-ui",
+                bin,
                 shell_escape(choice)
             )
         } else {
             format!(
-                "openclaw models auth login --provider {} --set-default",
+                "{} models auth login --provider {} --set-default",
+                bin,
                 shell_escape(&provider)
             )
         };
@@ -1359,7 +1608,8 @@ async fn models_auth_login_handler(
 
 /// Run a command, capture output, return JSON result. No URL interception.
 fn run_simple(cmd_str: &str) -> Result<serde_json::Value, String> {
-    let mut cmd = std::process::Command::new("bash");
+    let shell = clawladder_core::path_utils::user_shell();
+    let mut cmd = std::process::Command::new(&shell);
     cmd.args(["-lc", cmd_str]);
     clawladder_core::path_utils::apply_rich_env(&mut cmd);
     match cmd.output() {
@@ -1383,7 +1633,8 @@ fn run_with_browser_intercept(cmd_str: &str) -> Result<serde_json::Value, String
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    let mut cmd = std::process::Command::new("bash");
+    let shell = clawladder_core::path_utils::user_shell();
+    let mut cmd = std::process::Command::new(&shell);
     cmd.args(["-lc", cmd_str]);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -1507,6 +1758,26 @@ async fn models_auth_status_handler(
 }
 
 // ---------------------------------------------------------------------------
+// Usage stats: scan JSONL files for token usage
+// ---------------------------------------------------------------------------
+
+/// GET /api/usage?days=30 — scan session JSONL files and return aggregated usage
+async fn usage_stats_handler(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let days: u32 = params
+        .get("days")
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(30);
+
+    let stats = tokio::task::spawn_blocking(move || usage::scan_usage(days))
+        .await
+        .unwrap_or_default();
+
+    Json(serde_json::to_value(&stats).unwrap_or_default())
+}
+
+// ---------------------------------------------------------------------------
 // Plugins: enable/disable
 // ---------------------------------------------------------------------------
 
@@ -1521,8 +1792,10 @@ async fn plugins_enable_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let name = body.name;
     let result = tokio::task::spawn_blocking(move || {
-        let cmd_str = format!("openclaw plugins enable {}", shell_escape(&name));
-        let mut cmd = std::process::Command::new("bash");
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let cmd_str = format!("{} plugins enable {}", bin, shell_escape(&name));
+        let shell = clawladder_core::path_utils::user_shell();
+        let mut cmd = std::process::Command::new(&shell);
         cmd.args(["-lc", &cmd_str]);
         clawladder_core::path_utils::apply_rich_env(&mut cmd);
         match cmd.output() {

@@ -4,3 +4,4 @@ pub mod logger;
 pub mod path_utils;
 pub mod pty;
 pub mod session;
+pub mod usage;

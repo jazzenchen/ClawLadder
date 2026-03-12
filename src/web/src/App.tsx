@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { Terminal } from "./components/Terminal";
 import { Dashboard } from "./components/Dashboard";
 import { OnboardingWizard } from "./components/OnboardingWizard";
+import { InstallingView, useInstallLogs } from "./components/InstallingView";
+import { InitializingView } from "./components/InitializingView";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -14,26 +16,24 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ArrowRight, Terminal as TerminalIcon, Package } from "lucide-react";
+import { CheckCircle2, LayoutDashboard } from "lucide-react";
 import {
   fetchStatus,
   validateSudo,
   startInstall,
   deleteSession,
-  gatewayInstall,
-  runOnboard,
-  setClawLadderStatus,
   type StatusInfo,
 } from "@/lib/api";
 
 type Phase =
   | "loading"
-  | "idle"           // no openclaw.json → show installer
-  | "installed"      // ClawLadder.status = "configured" → Dashboard
-  | "needs-config"   // ClawLadder.status = "installed" → prompt user to configure
-  | "no-clawladder"  // openclaw.json exists but no ClawLadder key → ask re-configure
+  | "idle"           // openclaw binary not found → show installer
+  | "installed"      // openclaw binary found but no openclaw.json → prompt to configure
+  | "initializing"   // running onboard + gateway registration
+  | "dashboard"      // openclaw.json exists → Dashboard
   | "password"
   | "installing"
-  | "post-install"
   | "onboarding"
   | "error";
 
@@ -48,7 +48,9 @@ export default function App() {
   const [verbose, setVerbose] = useState(false);
   const [useHomebrew, setUseHomebrew] = useState(false);
   const [statusInfo, setStatusInfo] = useState<StatusInfo | null>(null);
-  const [postInstallMsg, setPostInstallMsg] = useState("");
+  // Whether to use the structured install UI (nvm + non-verbose)
+  const [useStructuredUI, setUseStructuredUI] = useState(false);
+  const installLogs = useInstallLogs();
 
   const checkStatus = useCallback(async () => {
     try {
@@ -58,25 +60,12 @@ export default function App() {
       if (!data.installed) {
         // OpenClaw binary not found → show installer
         setPhase("idle");
+      } else if (data.configured) {
+        // openclaw.json exists → Dashboard
+        setPhase("dashboard");
       } else {
-        // OpenClaw is installed — check ClawLadder status
-        const cls = data.clawladder_status;
-        if (cls === null || cls === undefined) {
-          // No openclaw.json at all → show installer (shouldn't happen if installed, but safe)
-          setPhase("idle");
-        } else if (cls === "configured") {
-          // Fully configured → Dashboard
-          setPhase("installed");
-        } else if (cls === "installed") {
-          // Installed + onboarded but not configured → prompt user
-          setPhase("needs-config");
-        } else if (cls === "none") {
-          // openclaw.json exists but no ClawLadder key → ask re-configure
-          setPhase("no-clawladder");
-        } else {
-          // Unknown status → treat as needs-config
-          setPhase("needs-config");
-        }
+        // OpenClaw binary found but no openclaw.json → installed, needs config
+        setPhase("installed");
       }
       return data;
     } catch {
@@ -94,9 +83,13 @@ export default function App() {
       // Homebrew path: need sudo password
       setPassword("");
       setPasswordError("");
+      setUseStructuredUI(false);
       setPhase("password");
     } else {
       // nvm path: no password needed, start directly
+      const structured = !verbose;
+      setUseStructuredUI(structured);
+      if (structured) installLogs.reset();
       try {
         const sid = await startInstall("", verbose, false);
         setSessionId(sid);
@@ -141,63 +134,22 @@ export default function App() {
     }
     setShowCancelConfirm(false);
     setSessionId(null);
+    installLogs.reset();
     setPhase("idle");
   };
-
-  // Post-install: run onboard, register gateway, write ClawLadder status
-  const runPostInstall = useCallback(async () => {
-    setPhase("post-install");
-    try {
-      // 1. Run openclaw onboard (base config + daemon install)
-      setPostInstallMsg("正在执行初始化配置…");
-      await runOnboard({
-        auth_choice: "skip",
-        install_daemon: true,
-        skip_channels: true,
-        skip_skills: true,
-        skip_search: true,
-        skip_health: true,
-        skip_ui: true,
-      });
-
-      // 2. Register gateway as system service
-      setPostInstallMsg("正在注册 Gateway 服务…");
-      try {
-        await gatewayInstall();
-      } catch {
-        // Gateway install failed — not fatal, user can do it later
-      }
-
-      // 3. Write ClawLadder.status = "installed" to openclaw.json
-      setPostInstallMsg("正在写入安装状态…");
-      await setClawLadderStatus("installed");
-
-      // 4. Refresh status and go to needs-config (the "已安装" prompt screen)
-      await new Promise((r) => setTimeout(r, 500));
-      await checkStatus();
-    } catch (e) {
-      // If onboard or status write fails, still try to show needs-config
-      setPostInstallMsg(
-        `初始化部分失败 (${e instanceof Error ? e.message : String(e)})，尝试继续…`
-      );
-      await new Promise((r) => setTimeout(r, 2000));
-      // Try to write status anyway
-      try { await setClawLadderStatus("installed"); } catch { /* ignore */ }
-      await checkStatus();
-    }
-  }, [checkStatus]);
 
   const handleExit = useCallback(
     (code: number) => {
       if (code === 0) {
-        // Installation succeeded — run post-install steps
-        runPostInstall();
+        // Installation succeeded — go to installed page
+        // (openclaw.json doesn't exist yet, user will click "继续配置" to initialize)
+        checkStatus();
       } else {
         setErrorMsg(`安装进程退出，退出码: ${code}`);
         setPhase("error");
       }
     },
-    [runPostInstall]
+    [checkStatus]
   );
 
   // =========================================================================
@@ -207,20 +159,20 @@ export default function App() {
   // Loading
   if (phase === "loading") {
     return (
-      <div className="dark h-full w-full flex items-center justify-center bg-background">
+      <div className="h-full w-full flex items-center justify-center bg-background">
         <p className="text-sm text-muted-foreground">检查中…</p>
       </div>
     );
   }
 
   // Already installed + configured → Dashboard
-  if (phase === "installed") {
+  if (phase === "dashboard") {
     return (
-      <div className="dark h-full w-full bg-background text-foreground overflow-y-auto">
+      <div className="h-full w-full bg-background text-foreground overflow-y-auto">
         <Dashboard
           installed={true}
           version={statusInfo?.version}
-          onResetConfig={() => setPhase("onboarding")}
+          onResetConfig={() => setPhase("installed")}
         />
       </div>
     );
@@ -229,42 +181,66 @@ export default function App() {
   // Idle: install button
   if (phase === "idle") {
     return (
-      <div className="dark h-full w-full flex flex-col items-center justify-center gap-6 bg-background">
-        <div className="flex flex-col items-center gap-3">
-          <span className="text-4xl">🦞</span>
-          <h1 className="text-2xl font-medium text-foreground">ClawLadder Installer</h1>
-          <p className="text-sm text-muted-foreground">一键安装 OpenClaw</p>
-        </div>
-        <Button size="lg" onClick={handleInstallClick}>
-          安装 OpenClaw
-        </Button>
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="verbose"
-              checked={verbose}
-              onCheckedChange={(checked) => setVerbose(checked as boolean)}
-            />
-            <Label
-              htmlFor="verbose"
-              className="text-sm text-muted-foreground cursor-pointer select-none"
-            >
-              详细日志
-            </Label>
+      <div className="h-full w-full flex flex-col items-center justify-center min-h-screen p-8 bg-background page-transition">
+        <div className="flex flex-col items-center gap-6 max-w-md text-center">
+          {/* Logo with subtle glow effect */}
+          <div className="relative">
+            <div className="absolute inset-0 blur-3xl bg-primary/20 rounded-full scale-150" />
+            <span className="relative z-10 text-6xl block">🦞</span>
           </div>
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="useHomebrew"
-              checked={useHomebrew}
-              onCheckedChange={(checked) => setUseHomebrew(checked as boolean)}
-            />
-            <Label
-              htmlFor="useHomebrew"
-              className="text-sm text-muted-foreground cursor-pointer select-none"
-            >
-              通过 Homebrew 安装（需要管理员密码）
-            </Label>
+
+          {/* Title */}
+          <div className="space-y-2">
+            <h1 className="text-3xl font-bold tracking-tight text-foreground">
+              ClawLadder
+            </h1>
+            <p className="text-muted-foreground">
+              一键安装 OpenClaw AI 助手
+            </p>
           </div>
+
+          {/* Install button with glow on hover */}
+          <Button
+            size="lg"
+            onClick={handleInstallClick}
+            className="install-btn mt-4 gap-2 px-8 h-12 text-base font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-all"
+          >
+            开始安装
+            <ArrowRight className="w-4 h-4" />
+          </Button>
+
+          {/* Options */}
+          <div className="flex flex-col gap-3 mt-6 w-full max-w-sm">
+            <label className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 border border-border/40 hover:border-border/60 transition-colors cursor-pointer group">
+              <Checkbox
+                checked={verbose}
+                onCheckedChange={(checked) => setVerbose(checked === true)}
+                className="data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+              />
+              <div className="flex items-center gap-2 text-sm text-muted-foreground group-hover:text-foreground transition-colors">
+                <TerminalIcon className="w-4 h-4 shrink-0" />
+                <span>显示详细日志</span>
+              </div>
+            </label>
+
+            <label className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 border border-border/40 hover:border-border/60 transition-colors cursor-pointer group">
+              <Checkbox
+                checked={useHomebrew}
+                onCheckedChange={(checked) => setUseHomebrew(checked === true)}
+                className="data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+              />
+              <div className="flex items-center gap-2 text-sm text-muted-foreground group-hover:text-foreground transition-colors">
+                <Package className="w-4 h-4 shrink-0" />
+                <span className="whitespace-nowrap">通过 Homebrew 安装</span>
+                <span className="text-xs text-muted-foreground/60 whitespace-nowrap">(需要管理员密码)</span>
+              </div>
+            </label>
+          </div>
+
+          {/* Version info */}
+          <p className="text-xs text-muted-foreground/50 mt-8">
+            v2026.3.11 • ClawLadder Installer
+          </p>
         </div>
       </div>
     );
@@ -273,7 +249,7 @@ export default function App() {
   // Password dialog
   if (phase === "password") {
     return (
-      <div className="dark h-full w-full flex items-center justify-center bg-background">
+      <div className="h-full w-full flex items-center justify-center bg-background">
         <Dialog
           open
           onOpenChange={(open) => {
@@ -319,10 +295,54 @@ export default function App() {
     );
   }
 
-  // Installing: xterm with cancel
+  // Installing: structured UI for nvm+non-verbose, xterm for others
   if (phase === "installing" && sessionId) {
+    if (useStructuredUI) {
+      return (
+        <div className="h-full w-full bg-background text-foreground">
+          {/* Hidden terminal to capture PTY output */}
+          <div className="hidden">
+            <Terminal
+              sessionId={sessionId}
+              disableStdin
+              onOutput={installLogs.handleOutput}
+              onExit={handleExit}
+            />
+          </div>
+          <InstallingView
+            progress={installLogs.progress}
+            logs={installLogs.logs}
+            onCancel={() => setShowCancelConfirm(true)}
+          />
+
+          <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>确认取消安装？</DialogTitle>
+                <DialogDescription>
+                  安装正在进行中，取消可能导致安装不完整。
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowCancelConfirm(false)}
+                >
+                  继续安装
+                </Button>
+                <Button variant="default" onClick={handleCancel}>
+                  确认取消
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      );
+    }
+
+    // Fallback: xterm terminal UI
     return (
-      <div className="dark h-full w-full flex flex-col bg-background">
+      <div className="h-full w-full flex flex-col bg-background">
         <div className="flex items-center justify-between px-4 py-2 border-b border-border">
           <span className="text-sm text-muted-foreground">🦞 正在安装 OpenClaw…</span>
           <Button
@@ -352,7 +372,7 @@ export default function App() {
               >
                 继续安装
               </Button>
-              <Button variant="destructive" onClick={handleCancel}>
+              <Button variant="default" onClick={handleCancel}>
                 确认取消
               </Button>
             </DialogFooter>
@@ -362,78 +382,83 @@ export default function App() {
     );
   }
 
-  // Post-install: registering gateway
-  if (phase === "post-install") {
+  // Initializing: run onboard + gateway registration
+  if (phase === "initializing") {
     return (
-      <div className="dark h-full w-full flex flex-col items-center justify-center gap-4 bg-background">
-        <span className="text-4xl">⚙️</span>
-        <p className="text-sm text-muted-foreground">{postInstallMsg}</p>
-      </div>
+      <InitializingView
+        onComplete={() => {
+          // After initialization, openclaw.json exists → go to onboarding wizard
+          setPhase("onboarding");
+        }}
+      />
     );
   }
 
-  // No ClawLadder key in openclaw.json — ask user if they want to re-configure
-  if (phase === "no-clawladder") {
+  // Installed but not configured — prompt user
+  if (phase === "installed") {
     return (
-      <div className="dark h-full w-full flex flex-col items-center justify-center gap-6 bg-background">
-        <div className="flex flex-col items-center gap-3">
-          <span className="text-4xl">🦞</span>
-          <h1 className="text-xl font-medium text-foreground">OpenClaw 已安装</h1>
-          {statusInfo?.version && (
-            <p className="text-xs text-muted-foreground">版本 {statusInfo.version}</p>
-          )}
-        </div>
-        <div className="flex flex-col items-center gap-2 max-w-sm text-center">
-          <p className="text-sm text-muted-foreground">
-            检测到已有配置文件，但缺少 ClawLadder 配置项。是否需要重新配置？这将覆盖现有的所有配置。
-          </p>
-        </div>
-        <div className="flex gap-3">
-          <Button
-            size="lg"
-            onClick={() => setPhase("onboarding")}
-          >
-            重新配置
-          </Button>
-          <Button
-            size="lg"
-            variant="outline"
-            onClick={() => setPhase("installed")}
-          >
-            跳过，进入控制面板
-          </Button>
-        </div>
-      </div>
-    );
-  }
+      <div className="h-full w-full flex flex-col items-center justify-center min-h-screen p-8 bg-background page-transition">
+        <div className="flex flex-col items-center gap-6 max-w-lg text-center">
+          {/* Success animation */}
+          <div className="relative">
+            <div className="absolute inset-0 blur-3xl bg-emerald-500/10 rounded-full scale-150" />
+            <div className="relative z-10">
+              <span className="text-6xl block">🦞</span>
+              <div className="absolute -bottom-0.5 -right-0.5 w-6 h-6 rounded-full bg-emerald-600 flex items-center justify-center shadow-md">
+                <CheckCircle2 className="w-4 h-4 text-white" />
+              </div>
+            </div>
+          </div>
 
-  // Needs config: installed but not configured — prompt user
-  if (phase === "needs-config") {
-    return (
-      <div className="dark h-full w-full flex flex-col items-center justify-center gap-6 bg-background">
-        <div className="flex flex-col items-center gap-3">
-          <span className="text-4xl">🦞</span>
-          <h1 className="text-xl font-medium text-foreground">OpenClaw 已安装</h1>
-          {statusInfo?.version && (
-            <p className="text-xs text-muted-foreground">版本 {statusInfo.version}</p>
-          )}
-        </div>
-        <div className="flex flex-col items-center gap-2 max-w-sm text-center">
-          <p className="text-sm text-muted-foreground">
-            检测到 OpenClaw 已安装但尚未完成配置。需要配置 AI 模型和频道才能正常使用。
-          </p>
-        </div>
-        <div className="flex gap-3">
-          <Button size="lg" onClick={() => setPhase("onboarding")}>
-            继续配置 →
-          </Button>
-          <Button
-            size="lg"
-            variant="outline"
-            onClick={() => setPhase("installed")}
-          >
-            跳过，进入控制面板
-          </Button>
+          {/* Title */}
+          <div className="space-y-3">
+            <h1 className="text-3xl font-bold tracking-tight text-foreground">
+              OpenClaw 已安装
+            </h1>
+            {statusInfo?.version && (
+              <p className="text-sm text-muted-foreground font-mono">
+                版本 {statusInfo.version}
+              </p>
+            )}
+          </div>
+
+          {/* Status message */}
+          <div className="p-4 rounded-xl bg-muted/30 border border-border/40 max-w-sm">
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              {statusInfo?.configured ? (
+                <>
+                  检测到已有配置文件，重新配置将覆盖现有的所有配置。
+                </>
+              ) : (
+                <>
+                  检测到 OpenClaw 已安装但尚未完成配置。
+                  <br />
+                  需要配置 <span className="text-foreground font-medium">AI 模型</span> 和 <span className="text-foreground font-medium">通讯工具</span> 才能正常使用。
+                </>
+              )}
+            </p>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-3 mt-4">
+            <Button
+              size="sm"
+              onClick={() => setPhase("initializing")}
+              className="install-btn gap-2 px-5 h-9 bg-primary hover:bg-primary/90 text-primary-foreground"
+            >
+              继续配置
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPhase("dashboard")}
+              className="gap-2 px-5 h-9 border-border/50 hover:bg-muted/50"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              跳过，进入控制面板
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -442,17 +467,13 @@ export default function App() {
   // Onboarding wizard — 固定高度，内部由 OnboardingWizard 的 Card 区域滚动
   if (phase === "onboarding") {
     return (
-      <div className="dark h-full w-full min-h-0 flex flex-col bg-background text-foreground">
+      <div className="h-full w-full min-h-0 flex flex-col bg-background text-foreground">
         <OnboardingWizard
           onComplete={async () => {
-            // Write ClawLadder.status = "configured" then go to Dashboard
-            try {
-              await setClawLadderStatus("configured");
-            } catch {
-              // non-fatal — still go to dashboard
-            }
+            // After onboarding, openclaw.json is fully configured → go to Dashboard
             checkStatus();
           }}
+          onExit={() => setPhase("installed")}
         />
       </div>
     );
@@ -461,7 +482,7 @@ export default function App() {
   // Error
   if (phase === "error") {
     return (
-      <div className="dark h-full w-full flex flex-col items-center justify-center gap-4 bg-background">
+      <div className="h-full w-full flex flex-col items-center justify-center gap-4 bg-background">
         <p className="text-sm text-destructive">{errorMsg}</p>
         <Button
           variant="outline"

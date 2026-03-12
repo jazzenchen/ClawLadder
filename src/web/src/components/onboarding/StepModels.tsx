@@ -21,6 +21,8 @@ import {
   type CatalogProvider,
 } from "../../lib/api";
 
+import { useOnboardingStore } from "../../stores/onboarding";
+
 // ── Exported state shape ───────────────────────────────────────────────────
 
 export type AuthMode =
@@ -39,6 +41,7 @@ export interface ProviderEntry {
   baseUrl: string;
   api: string;
   selectedModel: string;
+  customModelName?: string;
   customKey?: string;
   authMode: AuthMode;
   authenticated?: boolean;
@@ -769,10 +772,10 @@ function ModelSelector({
       <div className="flex flex-col gap-1.5">
         <Label className="text-xs">{label}</Label>
         <div className="relative" ref={ref}>
-          <div className="flex items-center border border-input rounded-md bg-transparent">
+          <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30">
             <input
               ref={inputRef}
-              className="flex-1 h-9 px-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+              className="flex-1 h-8 px-2.5 text-base md:text-sm bg-transparent outline-none placeholder:text-muted-foreground"
               placeholder={placeholder}
               value={value}
               onChange={(e) => onChange(e.target.value)}
@@ -788,10 +791,10 @@ function ModelSelector({
     <div className="flex flex-col gap-1.5">
       <Label className="text-xs">{label}</Label>
       <div className="relative" ref={ref}>
-        <div className="flex items-center border border-input rounded-md bg-transparent">
+        <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30">
           <input
             ref={inputRef}
-            className="flex-1 h-9 px-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+            className="flex-1 h-8 px-2.5 text-base md:text-sm bg-transparent outline-none placeholder:text-muted-foreground"
             placeholder={placeholder}
             value={value}
             onChange={(e) => {
@@ -858,14 +861,15 @@ function ModelSelector({
 // ── Props ──────────────────────────────────────────────────────────────────
 
 interface Props {
-  value: ModelsConfig;
-  onChange: (v: ModelsConfig) => void;
   onNext: () => void;
+  onExit?: () => void;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function StepModels({ value, onChange, onNext }: Props) {
+export function StepModels({ onNext, onExit }: Props) {
+  const value = useOnboardingStore((s) => s.modelsConfig);
+  const onChange = useOnboardingStore((s) => s.setModelsConfig);
   const [catalog, setCatalog] = useState<CatalogProvider[]>(STATIC_PROVIDERS);
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState<string | null>(null);
@@ -1168,10 +1172,10 @@ export function StepModels({ value, onChange, onNext }: Props) {
           <div className="flex flex-col gap-2">
             <Label>服务商 (Provider)</Label>
             <div className="relative" ref={dropdownRef}>
-              <div className="flex items-center border border-input rounded-md bg-transparent cursor-pointer">
+              <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30 cursor-pointer">
                 <input
                   ref={inputRef}
-                  className="flex-1 h-9 px-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+                  className="flex-1 h-8 px-2.5 text-base md:text-sm bg-transparent outline-none placeholder:text-muted-foreground"
                   placeholder="搜索或选择服务商…"
                   value={dropdownOpen ? searchQuery : getDisplayLabel()}
                   onChange={(e) => {
@@ -1625,13 +1629,30 @@ export function StepModels({ value, onChange, onNext }: Props) {
                       });
                     }}
                   />
+                  <div className="flex flex-col gap-1.5">
+                    <Label className="text-xs">Model Name（可选）</Label>
+                    <Input
+                      placeholder="显示名称，如 GPT-4o"
+                      value={selectedEntry.customModelName ?? ""}
+                      onChange={(e) =>
+                        updateProvider(selectedIdx, {
+                          customModelName: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
                 </div>
               </div>
             )}
         </div>
       </ScrollArea>
 
-      <div className="shrink-0 flex justify-end pt-4 px-4 border-t border-border">
+      <div className="shrink-0 flex justify-between pt-4 px-4 border-t border-border">
+        {onExit ? (
+          <Button variant="ghost" onClick={onExit} className="text-muted-foreground">
+            退出
+          </Button>
+        ) : <div />}
         <Button onClick={onNext} disabled={!canProceed}>
           下一步 →
         </Button>

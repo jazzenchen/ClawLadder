@@ -15,11 +15,12 @@
         "label": "main",
         "title": "ClawLadder",
         "width": 720,
-        "height": 1080,
+        "height": 960,
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
-        "url": "http://127.0.0.1:3145"
+        "url": "http://127.0.0.1:3145",
+        "create": false
       }
     ],
     "security": {

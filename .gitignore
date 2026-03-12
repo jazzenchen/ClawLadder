@@ -23,6 +23,9 @@ src/apple-sign.config
 .DS_Store
 **/.DS_Store
 
+# Debug
+.debug/
+
 # IDE / AI
 .vscode/
 .claude/

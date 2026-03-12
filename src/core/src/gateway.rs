@@ -1,7 +1,10 @@
 //! Control the OpenClaw gateway via `openclaw gateway` CLI commands.
 //!
-//! All commands are run via `bash -lc "openclaw ..."` so the user's PATH is
-//! available (Homebrew, nvm, etc.).
+//! All commands are run via the user's login shell so the user's PATH is
+//! available (Homebrew, nvm, fnm, volta, asdf, mise, etc.).
+//!
+//! When possible we use the resolved absolute path to `openclaw` (persisted
+//! in `~/.openclaw/clawladder.json`) so we don't depend on PATH at all.
 //!
 //! We trust the JSON output from `openclaw gateway status --json` as the
 //! single source of truth — no custom plist/systemd detection or TCP probing.
@@ -43,8 +46,10 @@ pub struct GatewayStatus {
 
 /// Run an openclaw command via login shell and return (stdout, stderr, success).
 fn run_openclaw_cmd(args: &str) -> (String, String, bool) {
-    let cmd = format!("openclaw {}", args);
-    let mut command = std::process::Command::new("bash");
+    let bin = crate::path_utils::resolve_openclaw_bin();
+    let cmd = format!("{} {}", bin, args);
+    let shell = crate::path_utils::user_shell();
+    let mut command = std::process::Command::new(&shell);
     command.args(["-lc", &cmd]);
     crate::path_utils::apply_rich_env(&mut command);
     match command.output() {
