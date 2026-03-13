@@ -44,6 +44,7 @@ import {
   fetchGatewayStatus,
   fetchGatewayUrl,
   fetchOpenClawStatus,
+  fetchDeviceSerial,
   gatewayInstall,
   gatewayStart,
   gatewayRestart,
@@ -54,6 +55,7 @@ import {
   type GatewayStatus,
   type GatewayUrl,
   type OpenClawStatus,
+  type DeviceInfo,
 } from "@/lib/api";
 import { UsageDialog } from "@/components/UsageDialog";
 
@@ -288,6 +290,7 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
   const [openingDashboard, setOpeningDashboard] = useState(false);
   const [doctorOutput, setDoctorOutput] = useState<string | null>(null);
   const [usageDialogOpen, setUsageDialogOpen] = useState(false);
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
 
   const [pendingAction, setPendingAction] = useState<{
     key: string;
@@ -317,13 +320,18 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
     }
   }, []);
 
+  // Fetch device info once on mount
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 15_000);
-    return () => clearInterval(interval);
-  }, [refresh]);
+    fetchDeviceSerial().then(setDeviceInfo).catch(() => {});
+  }, []);
 
   const isRunning = gwStatus?.running ?? false;
+
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(refresh, isRunning ? 15_000 : 5_000);
+    return () => clearInterval(interval);
+  }, [refresh, isRunning]);
 
   const tokenStats = useMemo(() => {
     if (!ocStatus?.sessions?.recent) return { input: 0, output: 0, total: 0 };
@@ -408,7 +416,7 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
               }}
               className="gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground h-8 px-3"
             >
-              <span className="hidden sm:inline">打开面板</span>
+              <span className="hidden sm:inline">打开 OpenClaw 面板</span>
               <ExternalLink className="w-3.5 h-3.5" />
             </Button>
           </div>
@@ -700,6 +708,22 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
                 status={ocStatus?.gateway?.reachable ? "success" : "error"}
               />
 
+              {/* Device info */}
+              {deviceInfo?.serial && (
+                <InfoRow
+                  label="设备序列号"
+                  value={deviceInfo.serial}
+                  mono
+                />
+              )}
+              {deviceInfo?.hardwareUUID && (
+                <InfoRow
+                  label="硬件 UUID"
+                  value={deviceInfo.hardwareUUID}
+                  mono
+                />
+              )}
+
               {/* Token */}
               {gwUrl?.token && (
                 <div className="pt-3 border-t border-border/30">
@@ -746,22 +770,6 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
         {/* Bottom Action Bar */}
         <div className="mt-6 pt-6 border-t border-border/30">
           <div className="flex flex-wrap items-center justify-center gap-2">
-            <ActionButton
-              icon={<ExternalLink className="w-4 h-4" />}
-              label="打开面板"
-              disabled={!gwUrl?.httpUrl || !isRunning || openingDashboard}
-              loading={openingDashboard}
-              onClick={async () => {
-                setOpeningDashboard(true);
-                try {
-                  await gatewayOpenDashboard();
-                } catch {
-                  if (gwUrl?.httpUrl) openExternal(gwUrl.httpUrl);
-                } finally {
-                  setOpeningDashboard(false);
-                }
-              }}
-            />
             <ActionButton
               icon={<RotateCcw className="w-4 h-4" />}
               label="重启网关"

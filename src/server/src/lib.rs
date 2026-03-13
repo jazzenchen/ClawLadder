@@ -81,6 +81,8 @@ pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) {
         .route("/api/models/auth/login", post(models_auth_login_handler))
         .route("/api/models/auth/status", get(models_auth_status_handler))
         .route("/api/plugins/enable", post(plugins_enable_handler))
+        // Device info
+        .route("/api/device/serial", get(device_serial_handler))
         // Usage stats (JSONL scan)
         .route("/api/usage", get(usage_stats_handler))
         // WebSocket
@@ -178,6 +180,52 @@ async fn sudo_validate(
         ))
     }
 }
+
+/// Return the device serial number (macOS: IOPlatformSerialNumber, Linux: /etc/machine-id).
+async fn device_serial_handler() -> Json<serde_json::Value> {
+    let (serial, hardware_uuid) = tokio::task::spawn_blocking(|| {
+        let serial = get_macos_serial().unwrap_or_default();
+        let uuid = get_macos_hardware_uuid().unwrap_or_default();
+        (serial, uuid)
+    })
+    .await
+    .unwrap_or_default();
+
+    Json(serde_json::json!({
+        "serial": serial,
+        "hardwareUUID": hardware_uuid,
+    }))
+}
+
+fn get_macos_serial() -> Option<String> {
+    let output = std::process::Command::new("ioreg")
+        .args(["-l"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if line.contains("IOPlatformSerialNumber") {
+            // Format: "IOPlatformSerialNumber" = "XXXX"
+            return line.split('"').nth(3).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+fn get_macos_hardware_uuid() -> Option<String> {
+    let output = std::process::Command::new("ioreg")
+        .args(["-d2", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if line.contains("IOPlatformUUID") {
+            return line.split('"').nth(3).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
 /// Check if ClawLadder is installed and/or running.
 async fn check_status() -> Json<serde_json::Value> {
     let (installed, version) = tokio::task::spawn_blocking(|| {
@@ -240,6 +288,9 @@ struct InstallRequest {
     /// When false (default), use nvm path (no sudo needed).
     #[serde(default)]
     use_homebrew: bool,
+    /// When true, use China mirrors for nvm/npm/node downloads.
+    #[serde(default)]
+    use_china_mirror: bool,
 }
 
 async fn start_install(
@@ -305,46 +356,236 @@ async fn start_install_nvm(
     state: AppState,
     body: InstallRequest,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    tracing::info!("Install requested (nvm path, no sudo)");
+    tracing::info!("Install requested (standalone node path, china_mirror={})", body.use_china_mirror);
     let verbose_flag = if body.verbose { "set -x && " } else { "" };
 
+    let node_index_url = if body.use_china_mirror {
+        "https://npmmirror.com/mirrors/node/index.json"
+    } else {
+        "https://nodejs.org/dist/index.json"
+    };
+
+    let node_dist_base = if body.use_china_mirror {
+        "https://npmmirror.com/mirrors/node"
+    } else {
+        "https://nodejs.org/dist"
+    };
+
+    let npm_mirror_cmd = if body.use_china_mirror {
+        r#"
+echo "==> 设置 npm 国内镜像..."
+npm config set registry https://registry.npmmirror.com
+"#
+    } else {
+        ""
+    };
+
     let cmd = format!(
-        r#"{verbose}
-echo "==> Checking nvm..."
-if [ ! -d "$HOME/.nvm" ]; then
-  echo "==> nvm not found, installing..."
-  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
-else
-  echo "==> nvm already installed, skipping"
+        r##"{verbose}
+set -e
+
+NODE_MIN_MAJOR=22
+NODE_DIR="$HOME/.clawladder/node"
+
+# ---------------------------------------------------------------
+# Step 0: Ensure Xcode Command Line Tools + git (macOS only)
+# ---------------------------------------------------------------
+# Uses the same approach as Homebrew's install.sh — proven on 10.9–15.x
+if [ "$(uname -s)" = "Darwin" ]; then
+  if ! xcode-select -p &>/dev/null; then
+    echo "==> 安装 Xcode Command Line Tools（纯命令行，无弹窗）..."
+    # This placeholder file makes softwareupdate list CLT as available
+    touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
+
+    # Use Homebrew's proven label-extraction logic (works on macOS 10.9–15.x)
+    CLT_LABEL=$(softwareupdate -l 2>/dev/null \
+      | grep -B 1 -E 'Command Line Tools' \
+      | awk -F'*' '/^\s*\*/ {{print $2}}' \
+      | sed -e 's/^ *Label: //' -e 's/^ *//' \
+      | sort -V \
+      | tail -n1)
+
+    if [ -n "$CLT_LABEL" ]; then
+      echo "==> 找到: $CLT_LABEL"
+      echo "==> 正在安装（约 5-10 分钟）..."
+      softwareupdate --verbose --install "$CLT_LABEL" 2>&1
+    else
+      echo "==> softwareupdate 未列出 CLT，尝试 xcode-select 触发..."
+      xcode-select --install 2>/dev/null || true
+      # Wait for user/system to complete the install
+      echo "==> 等待 Xcode CLT 安装完成..."
+      WAITED=0
+      while [ $WAITED -lt 600 ]; do
+        if xcode-select -p &>/dev/null; then break; fi
+        sleep 5
+        WAITED=$((WAITED + 5))
+        if [ $((WAITED % 30)) -eq 0 ]; then
+          echo "==> 仍在等待... (${{WAITED}}s)"
+        fi
+      done
+    fi
+
+    rm -f /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
+
+    # Final check
+    if ! xcode-select -p &>/dev/null; then
+      echo "ERROR: Xcode Command Line Tools 安装失败"
+      echo "请手动运行: xcode-select --install"
+      exit 1
+    fi
+    echo "==> Xcode Command Line Tools 安装完成"
+  else
+    echo "==> Xcode CLT 已安装: $(xcode-select -p)"
+  fi
+
+  # Verify git
+  if ! command -v git &>/dev/null; then
+    echo "ERROR: Xcode CLT 已安装但 git 不可用"
+    exit 1
+  fi
+  echo "==> git 已可用: $(git --version)"
 fi
 
-export NVM_DIR="$HOME/.nvm"
-. "$NVM_DIR/nvm.sh"
+# ---------------------------------------------------------------
+# Step 1: Check if a usable Node.js already exists
+# ---------------------------------------------------------------
+NEED_INSTALL=1
 
-echo "==> Installing Node.js 24 via nvm..."
-nvm install 24
-nvm use 24
+check_node() {{
+  local NODE_BIN="$1"
+  if [ -x "$NODE_BIN" ]; then
+    local VER
+    VER=$("$NODE_BIN" -v 2>/dev/null | sed 's/^v//')
+    local MAJOR
+    MAJOR=$(echo "$VER" | cut -d. -f1)
+    if [ "$MAJOR" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null; then
+      echo "==> 检测到 Node.js v$VER (>= $NODE_MIN_MAJOR)，跳过安装"
+      NEED_INSTALL=0
+      # Make sure this node's bin dir is in PATH
+      export PATH="$(dirname "$NODE_BIN"):$PATH"
+      return 0
+    else
+      echo "==> 检测到 Node.js v$VER，版本过低 (需要 >= $NODE_MIN_MAJOR)"
+    fi
+  fi
+  return 1
+}}
 
+echo "==> 检查 Node.js ..."
+
+# 1a. Check our own managed install
+check_node "$NODE_DIR/bin/node" || true
+
+# 1b. Check system/nvm/brew node
+if [ "$NEED_INSTALL" -eq 1 ]; then
+  SYSTEM_NODE=$(command -v node 2>/dev/null || true)
+  if [ -n "$SYSTEM_NODE" ]; then
+    check_node "$SYSTEM_NODE" || true
+  fi
+fi
+
+# ---------------------------------------------------------------
+# Step 2: Install Node.js standalone binary if needed
+# ---------------------------------------------------------------
+if [ "$NEED_INSTALL" -eq 1 ]; then
+  echo "==> 需要安装 Node.js ..."
+
+  # Detect architecture
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    arm64|aarch64) NODE_ARCH="arm64" ;;
+    x86_64)        NODE_ARCH="x64" ;;
+    *)             echo "ERROR: 不支持的架构: $ARCH"; exit 1 ;;
+  esac
+
+  # Detect OS
+  OS=$(uname -s)
+  case "$OS" in
+    Darwin) NODE_OS="darwin" ;;
+    Linux)  NODE_OS="linux" ;;
+    *)      echo "ERROR: 不支持的系统: $OS"; exit 1 ;;
+  esac
+
+  echo "==> 查询最新 LTS 版本..."
+  INDEX_URL="{node_index_url}"
+  NODE_VER=$(curl -fsSL "$INDEX_URL" | grep -m1 '"lts":"[A-Z]' | grep -o '"version":"v[^"]*"' | head -1 | cut -d'"' -f4)
+
+  if [ -z "$NODE_VER" ]; then
+    echo "ERROR: 无法获取 Node.js LTS 版本号"
+    exit 1
+  fi
+  echo "==> 最新 LTS: $NODE_VER"
+
+  TARBALL="node-${{NODE_VER}}-${{NODE_OS}}-${{NODE_ARCH}}.tar.gz"
+  DOWNLOAD_URL="{node_dist_base}/${{NODE_VER}}/$TARBALL"
+
+  echo "==> 下载 $TARBALL ..."
+  TMP_FILE=$(mktemp /tmp/node-XXXXXX.tar.gz)
+  curl -fSL --progress-bar -o "$TMP_FILE" "$DOWNLOAD_URL"
+
+  echo "==> 解压到 $NODE_DIR ..."
+  rm -rf "$NODE_DIR"
+  mkdir -p "$NODE_DIR"
+  tar -xzf "$TMP_FILE" -C "$NODE_DIR" --strip-components=1
+  rm -f "$TMP_FILE"
+
+  export PATH="$NODE_DIR/bin:$PATH"
+  echo "==> Node $(node -v) 安装完成"
+fi
+
+# ---------------------------------------------------------------
+# Step 3: Verify node & npm
+# ---------------------------------------------------------------
 echo "==> Node version: $(node -v)"
 echo "==> npm version: $(npm -v)"
-
+{npm_mirror}
+# ---------------------------------------------------------------
+# Step 4: Install OpenClaw
+# ---------------------------------------------------------------
 echo "==> Installing OpenClaw via npm..."
 npm install -g openclaw
 
-echo "==> Linking binary..."
-npm rebuild -g openclaw
+# Ensure npm global bin is in PATH (needed when using system node)
+NPM_GLOBAL_BIN="$(npm prefix -g)/bin"
+export PATH="$NPM_GLOBAL_BIN:$PATH"
 
 echo "==> Verifying installation..."
-export PATH="$NVM_DIR/versions/node/$(nvm current)/bin:$PATH"
 openclaw --version
 
 echo "==> Recording binary path..."
 OPENCLAW_BIN="$(which openclaw)"
 echo "OPENCLAW_BIN=$OPENCLAW_BIN"
 
+# ---------------------------------------------------------------
+# Step 5: Add openclaw to user's shell PATH (persistent)
+# ---------------------------------------------------------------
+OPENCLAW_BIN_DIR="$(dirname "$OPENCLAW_BIN")"
+PATH_LINE="export PATH=\"$OPENCLAW_BIN_DIR:\$PATH\""
+
+add_to_profile() {{
+  local profile="$1"
+  if [ -f "$profile" ] || [ "$2" = "create" ]; then
+    if ! grep -qF "$OPENCLAW_BIN_DIR" "$profile" 2>/dev/null; then
+      echo "" >> "$profile"
+      echo "# OpenClaw" >> "$profile"
+      echo "$PATH_LINE" >> "$profile"
+      echo "==> 已添加 PATH 到 $profile"
+    fi
+  fi
+}}
+
+# zsh (macOS default)
+add_to_profile "$HOME/.zshrc" create
+# bash
+add_to_profile "$HOME/.bashrc"
+add_to_profile "$HOME/.bash_profile"
+
 echo "==> Done!"
-"#,
+"##,
         verbose = verbose_flag,
+        node_index_url = node_index_url,
+        node_dist_base = node_dist_base,
+        npm_mirror = npm_mirror_cmd,
     );
 
     let session_id = spawn_install_session(&state, &cmd, false).await?;
@@ -371,6 +612,20 @@ async fn spawn_install_session(
     let buffer = Arc::new(CircularBuffer::new());
     let (live_tx, _) = broadcast::channel::<Bytes>(LIVE_BROADCAST_CAP);
 
+    // Create install log file: ~/.clawladder/logs/install/<timestamp>.log
+    let log_file = {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let log_dir = std::path::PathBuf::from(&home)
+            .join(".clawladder")
+            .join("logs")
+            .join("install");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let log_path = log_dir.join(format!("{}.log", ts));
+        tracing::info!(path = %log_path.display(), "Install log file");
+        std::fs::File::create(&log_path).ok()
+    };
+
     let ctx = SessionContext {
         bridge,
         resize_tx,
@@ -387,10 +642,18 @@ async fn spawn_install_session(
     let needs_sudo_cleanup = with_sudo_keepalive;
     tokio::spawn(async move {
         let mut accumulated = String::new();
+        let mut log_writer = log_file.map(std::io::BufWriter::new);
         while let Some(data) = pty_rx.recv().await {
             logger.pty(&data);
             buffer.push(&data);
             let _ = live_tx.send(Bytes::from(data.clone()));
+
+            // Write to install log file
+            if let Some(ref mut w) = log_writer {
+                use std::io::Write;
+                let _ = w.write_all(&data);
+                let _ = w.flush();
+            }
 
             // Accumulate text to scan for OPENCLAW_BIN= marker
             if let Ok(text) = std::str::from_utf8(&data) {
@@ -422,6 +685,14 @@ async fn spawn_install_session(
             .and_then(|ctx| ctx.bridge.wait_exit_code())
             .unwrap_or(1);
         tracing::info!(session_id = %sid, exit_code = exit_code, "Install PTY closed");
+
+        // Write exit code to log
+        if let Some(ref mut w) = log_writer {
+            use std::io::Write;
+            let _ = writeln!(w, "\n[exit code: {}]", exit_code);
+            let _ = w.flush();
+        }
+        drop(log_writer);
 
         let exit_msg = format!("{{\"type\":\"exit\",\"code\":{}}}", exit_code);
         let _ = live_tx.send(Bytes::from(exit_msg.into_bytes()));
@@ -677,7 +948,7 @@ struct ClawLadderStatusRequest {
     status: String,
 }
 
-/// POST /api/clawladder/status — set status in ~/.openclaw/clawladder.json
+/// POST /api/clawladder/status — set status in ~/.openclaw/clawladder.json (merge, do not overwrite openclaw_bin)
 async fn set_clawladder_status(
     Json(body): Json<ClawLadderStatusRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
@@ -687,12 +958,19 @@ async fn set_clawladder_status(
         let dir = format!("{}/.openclaw", home);
         let config_path = format!("{}/clawladder.json", dir);
 
-        // Create directory if needed
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Failed to create dir: {}", e))?;
 
-        // Write clawladder.json with status
-        let val = serde_json::json!({ "status": new_status });
+        // Merge status into existing JSON so we don't drop openclaw_bin
+        let mut val: serde_json::Value = std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        val.as_object_mut()
+            .ok_or_else(|| "clawladder.json is not an object".to_string())?
+            .insert("status".to_string(), serde_json::json!(new_status));
+
         let json = serde_json::to_string_pretty(&val)
             .map_err(|e| format!("Failed to serialize: {}", e))?;
         std::fs::write(&config_path, json)

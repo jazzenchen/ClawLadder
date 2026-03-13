@@ -147,11 +147,12 @@ export async function startInstall(
   password: string,
   verbose: boolean,
   useHomebrew: boolean = false,
+  useChinaMirror: boolean = true,
 ): Promise<string> {
   const res = await fetch(`${BASE}/api/install`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password, verbose, use_homebrew: useHomebrew }),
+    body: JSON.stringify({ password, verbose, use_homebrew: useHomebrew, use_china_mirror: useChinaMirror }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -163,6 +164,21 @@ export async function startInstall(
 
 export async function deleteSession(sessionId: string): Promise<void> {
   await fetch(`${BASE}/api/sessions/${sessionId}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// Device Info
+// ---------------------------------------------------------------------------
+
+export interface DeviceInfo {
+  serial: string;
+  hardwareUUID: string;
+}
+
+export async function fetchDeviceSerial(): Promise<DeviceInfo> {
+  const res = await fetch(`${BASE}/api/device/serial`);
+  if (!res.ok) throw new Error("Failed to fetch device serial");
+  return res.json();
 }
 
 // ---------------------------------------------------------------------------

@@ -132,6 +132,7 @@ pub fn build_rich_path() -> String {
     candidates.push("/opt/homebrew/sbin".into());
     candidates.push("/usr/local/bin".into());
     candidates.push("/usr/local/sbin".into());
+    candidates.push(format!("{}/.clawladder/node/bin", home)); // ClawLadder installs openclaw here
     candidates.push(format!("{}/.local/bin", home));
     candidates.push(format!("{}/.cargo/bin", home));
 

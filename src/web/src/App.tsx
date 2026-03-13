@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Terminal } from "./components/Terminal";
 import { Dashboard } from "./components/Dashboard";
 import { OnboardingWizard } from "./components/OnboardingWizard";
@@ -16,14 +16,16 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowRight, Terminal as TerminalIcon, Package } from "lucide-react";
+import { ArrowRight, Terminal as TerminalIcon, Package, Globe } from "lucide-react";
 import { CheckCircle2, LayoutDashboard } from "lucide-react";
 import {
   fetchStatus,
   validateSudo,
   startInstall,
   deleteSession,
+  fetchDeviceSerial,
   type StatusInfo,
+  type DeviceInfo,
 } from "@/lib/api";
 
 type Phase =
@@ -44,13 +46,18 @@ export default function App() {
   const [passwordError, setPasswordError] = useState("");
   const [validating, setValidating] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [errorDetail, setErrorDetail] = useState("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [verbose, setVerbose] = useState(false);
   const [useHomebrew, setUseHomebrew] = useState(false);
+  const [useChinaMirror, setUseChinaMirror] = useState(true);
   const [statusInfo, setStatusInfo] = useState<StatusInfo | null>(null);
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   // Whether to use the structured install UI (nvm + non-verbose)
   const [useStructuredUI, setUseStructuredUI] = useState(false);
   const installLogs = useInstallLogs();
+  // Keep last N chars of raw PTY output for error diagnostics
+  const rawOutputRef = useRef("");
 
   const checkStatus = useCallback(async () => {
     try {
@@ -58,13 +65,10 @@ export default function App() {
       setStatusInfo(data);
 
       if (!data.installed) {
-        // OpenClaw binary not found → show installer
         setPhase("idle");
       } else if (data.configured) {
-        // openclaw.json exists → Dashboard
         setPhase("dashboard");
       } else {
-        // OpenClaw binary found but no openclaw.json → installed, needs config
         setPhase("installed");
       }
       return data;
@@ -76,6 +80,7 @@ export default function App() {
 
   useEffect(() => {
     checkStatus();
+    fetchDeviceSerial().then(setDeviceInfo).catch(() => {});
   }, [checkStatus]);
 
   const handleInstallClick = async () => {
@@ -90,8 +95,9 @@ export default function App() {
       const structured = !verbose;
       setUseStructuredUI(structured);
       if (structured) installLogs.reset();
+      rawOutputRef.current = "";
       try {
-        const sid = await startInstall("", verbose, false);
+        const sid = await startInstall("", verbose, false, useChinaMirror);
         setSessionId(sid);
         setPhase("installing");
       } catch (e) {
@@ -117,7 +123,7 @@ export default function App() {
         return;
       }
 
-      const sid = await startInstall(password, verbose, true);
+      const sid = await startInstall(password, verbose, true, useChinaMirror);
       setSessionId(sid);
       setPhase("installing");
     } catch (e) {
@@ -138,14 +144,29 @@ export default function App() {
     setPhase("idle");
   };
 
+  const handleInstallOutput = useCallback((text: string) => {
+    installLogs.handleOutput(text);
+    // Keep last 2KB of raw output for error diagnostics
+    rawOutputRef.current += text;
+    if (rawOutputRef.current.length > 2048) {
+      rawOutputRef.current = rawOutputRef.current.slice(-2048);
+    }
+  }, [installLogs]);
+
   const handleExit = useCallback(
     (code: number) => {
       if (code === 0) {
-        // Installation succeeded — go to installed page
-        // (openclaw.json doesn't exist yet, user will click "继续配置" to initialize)
         checkStatus();
       } else {
+        // Extract last meaningful lines from raw PTY output
+        const raw = rawOutputRef.current
+          .replace(/\x1b\[[0-9;]*m/g, "")  // strip ANSI
+          .split(/\r?\n/)
+          .map(l => l.trim())
+          .filter(l => l.length > 0);
+        const lastLines = raw.slice(-8).join("\n");
         setErrorMsg(`安装进程退出，退出码: ${code}`);
+        setErrorDetail(lastLines);
         setPhase("error");
       }
     },
@@ -235,12 +256,31 @@ export default function App() {
                 <span className="text-xs text-muted-foreground/60 whitespace-nowrap">(需要管理员密码)</span>
               </div>
             </label>
+
+            <label className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 border border-border/40 hover:border-border/60 transition-colors cursor-pointer group">
+              <Checkbox
+                checked={useChinaMirror}
+                onCheckedChange={(checked) => setUseChinaMirror(checked === true)}
+                className="data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+              />
+              <div className="flex items-center gap-2 text-sm text-muted-foreground group-hover:text-foreground transition-colors">
+                <Globe className="w-4 h-4 shrink-0" />
+                <span className="whitespace-nowrap">使用国内镜像加速</span>
+                <span className="text-xs text-muted-foreground/60 whitespace-nowrap">(npmmirror.com)</span>
+              </div>
+            </label>
           </div>
 
           {/* Version info */}
           <p className="text-xs text-muted-foreground/50 mt-8">
             v2026.3.11 • ClawLadder Installer
           </p>
+          {deviceInfo?.serial && (
+            <p className="text-[10px] text-muted-foreground/40 font-mono">
+              SN: {deviceInfo.serial}
+              {deviceInfo.hardwareUUID ? ` • UUID: ${deviceInfo.hardwareUUID}` : ""}
+            </p>
+          )}
         </div>
       </div>
     );
@@ -305,7 +345,7 @@ export default function App() {
             <Terminal
               sessionId={sessionId}
               disableStdin
-              onOutput={installLogs.handleOutput}
+              onOutput={handleInstallOutput}
               onExit={handleExit}
             />
           </div>
@@ -354,7 +394,7 @@ export default function App() {
           </Button>
         </div>
         <div className="flex-1 min-h-0">
-          <Terminal sessionId={sessionId} disableStdin onExit={handleExit} />
+          <Terminal sessionId={sessionId} disableStdin onOutput={handleInstallOutput} onExit={handleExit} />
         </div>
 
         <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
@@ -482,12 +522,19 @@ export default function App() {
   // Error
   if (phase === "error") {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center gap-4 bg-background">
+      <div className="h-full w-full flex flex-col items-center justify-center gap-4 bg-background p-8">
         <p className="text-sm text-destructive">{errorMsg}</p>
+        {errorDetail && (
+          <div className="w-full max-w-lg">
+            <pre className="text-xs font-mono text-muted-foreground bg-muted/30 border border-border/40 rounded-lg p-4 max-h-48 overflow-auto whitespace-pre-wrap">
+              {errorDetail}
+            </pre>
+          </div>
+        )}
         <Button
           variant="outline"
           onClick={() => {
-            setPhase("idle");
+            setPhase("loading");
             checkStatus();
           }}
         >

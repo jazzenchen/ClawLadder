@@ -218,11 +218,13 @@ export function StepSkills({ onNext, onBack }: Props) {
         hasError = true;
         newErrors.__clawhub__ =
           e instanceof Error ? e.message : "安装 ClawHub 失败";
-        patch({ skillErrors: newErrors });
+        // Uncheck ClawHub and all skills on failure
+        patch({ installClawhubChecked: false, selectedSkills: new Set(), skillErrors: newErrors });
       }
     }
 
     // Phase 3: Install skills
+    const newSelected = new Set(selectedSkills);
     if (toInstall.length > 0 && !hasError) {
       for (const skill of toInstall) {
         current++;
@@ -239,9 +241,11 @@ export function StepSkills({ onNext, onBack }: Props) {
           } else {
             hasError = true;
             newErrors[skill.id] = msg;
+            // Uncheck the skill on install failure
+            newSelected.delete(skill.id);
           }
         }
-        patch({ installedSkills: newInstalled, skillErrors: newErrors });
+        patch({ installedSkills: newInstalled, skillErrors: newErrors, selectedSkills: newSelected });
       }
     }
 

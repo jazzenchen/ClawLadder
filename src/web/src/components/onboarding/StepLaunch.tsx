@@ -235,11 +235,11 @@ export function StepLaunch({ onBack, onComplete }: Props) {
       await saveConfig(existingConfig);
 
       // ── 6. Restart gateway ─────────────────────────────────────────
-      setStatus("正在重启 Gateway…");
+      setStatus("正在重启门户（Gateway）…");
       await gatewayRestart();
 
       // ── 7. Poll gateway until reachable ────────────────────────────
-      setStatus("等待 Gateway 启动…");
+      setStatus("等待门户（Gateway）启动…");
       for (let i = 0; i < 20; i++) {
         await new Promise((r) => setTimeout(r, 1500));
         try {

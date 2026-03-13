@@ -1,6 +1,6 @@
 {
   "productName": "ClawLadder",
-  "version": "0.1.11",
+  "version": "0.1.20",
   "identifier": "com.clawladder.app",
   "build": {
     "frontendDist": "../web/dist",
