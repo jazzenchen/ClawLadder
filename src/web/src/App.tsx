@@ -275,12 +275,12 @@ export default function App() {
           <p className="text-xs text-muted-foreground/50 mt-8">
             v2026.3.11 • ClawLadder Installer
           </p>
-          {deviceInfo?.serial && (
+          {/* {deviceInfo?.serial && (
             <p className="text-[10px] text-muted-foreground/40 font-mono">
               SN: {deviceInfo.serial}
               {deviceInfo.hardwareUUID ? ` • UUID: ${deviceInfo.hardwareUUID}` : ""}
             </p>
-          )}
+          )} */}
         </div>
       </div>
     );
