@@ -258,3 +258,31 @@ pub fn apply_rich_env_pty(cmd: &mut portable_pty::CommandBuilder) {
         cmd.env("NVM_DIR", nvm_dir);
     }
 }
+
+/// Locate the `web/dist` directory containing the front-end assets.
+///
+/// Search order:
+/// 1. Inside a macOS `.app` bundle: `<exe>/../Resources/web/dist`
+/// 2. `web/dist` relative to CWD
+/// 3. `../web/dist` relative to CWD
+/// 4. Fallback: `web/dist`
+pub fn find_web_dist() -> std::path::PathBuf {
+    use std::path::PathBuf;
+
+    // Inside .app bundle: Contents/MacOS/../Resources/web/dist
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(macos_dir) = exe.parent() {
+            let resources = macos_dir.join("../Resources/web/dist");
+            if resources.exists() {
+                return resources;
+            }
+        }
+    }
+    let candidates = [PathBuf::from("web/dist"), PathBuf::from("../web/dist")];
+    for p in &candidates {
+        if p.exists() {
+            return p.clone();
+        }
+    }
+    PathBuf::from("web/dist")
+}

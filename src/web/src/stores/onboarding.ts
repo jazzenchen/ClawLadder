@@ -27,7 +27,7 @@ export type StepId = (typeof STEPS)[number]["id"];
 
 interface OnboardingState {
   // Navigation
-  step: StepId;
+  stepIndex: number;
   maxStepReached: number;
 
   // Step data
@@ -54,7 +54,7 @@ interface OnboardingState {
 }
 
 const initialState = {
-  step: "models" as StepId,
+  stepIndex: 0,
   maxStepReached: 0,
   modelsConfig: {
     providers: [],
@@ -66,6 +66,10 @@ const initialState = {
   hooksState: defaultHooksStepState,
 };
 
+/** Derive the StepId from the store's stepIndex */
+export const selectStepId = (s: OnboardingState): StepId =>
+  STEPS[s.stepIndex]?.id ?? "models";
+
 export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   ...initialState,
 
@@ -75,24 +79,25 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     const idx = STEPS.findIndex((s) => s.id === stepId);
     if (idx >= 0) {
       set((s) => ({
-        step: stepId,
+        stepIndex: idx,
         maxStepReached: Math.max(s.maxStepReached, idx),
       }));
     }
   },
 
   goNext: () => {
-    const { step } = get();
-    const idx = STEPS.findIndex((s) => s.id === step);
-    const next = STEPS[idx + 1];
-    if (next) get().goToStep(next.id);
+    const { stepIndex } = get();
+    if (stepIndex < STEPS.length - 1) {
+      set((s) => ({
+        stepIndex: stepIndex + 1,
+        maxStepReached: Math.max(s.maxStepReached, stepIndex + 1),
+      }));
+    }
   },
 
   goBack: () => {
-    const { step } = get();
-    const idx = STEPS.findIndex((s) => s.id === step);
-    const prev = STEPS[idx - 1];
-    if (prev) set({ step: prev.id });
+    const { stepIndex } = get();
+    if (stepIndex > 0) set({ stepIndex: stepIndex - 1 });
   },
 
   // ── Data setters ────────────────────────────────────────────────────────

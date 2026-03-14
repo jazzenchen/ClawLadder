@@ -1,5 +1,4 @@
 use clawladder_core::logger::Logger;
-use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() {
@@ -10,24 +9,9 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(3145);
 
-    let dist_dir = find_web_dist();
-    server::run_server(port, dist_dir, logger).await;
-}
-
-fn find_web_dist() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(macos_dir) = exe.parent() {
-            let resources = macos_dir.join("../Resources/web/dist");
-            if resources.exists() {
-                return resources;
-            }
-        }
-    }
-    let candidates = [PathBuf::from("web/dist"), PathBuf::from("../web/dist")];
-    for p in &candidates {
-        if p.exists() {
-            return p.clone();
-        }
-    }
-    PathBuf::from("web/dist")
+    let dist_dir = clawladder_core::path_utils::find_web_dist();
+    server::run_server(port, dist_dir, logger).await.unwrap_or_else(|e| {
+        eprintln!("Server error: {}", e);
+        std::process::exit(1);
+    });
 }

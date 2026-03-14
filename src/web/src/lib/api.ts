@@ -3,6 +3,40 @@
 const BASE = "";
 
 // ---------------------------------------------------------------------------
+// Shared fetch helper — reduces repetitive error handling
+// ---------------------------------------------------------------------------
+
+async function apiFetch<T>(
+  url: string,
+  init?: RequestInit,
+  errorMsg = "API request failed",
+): Promise<T> {
+  const res = await fetch(`${BASE}${url}`, init);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || errorMsg);
+  }
+  // Handle 204 No Content or empty body
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text);
+}
+
+function apiPost<T>(url: string, body?: unknown, errorMsg?: string): Promise<T> {
+  return apiFetch<T>(
+    url,
+    {
+      method: "POST",
+      ...(body != null && {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    },
+    errorMsg,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
 
@@ -14,9 +48,7 @@ export interface StatusInfo {
 }
 
 export async function fetchStatus(): Promise<StatusInfo> {
-  const res = await fetch(`${BASE}/api/status`);
-  if (!res.ok) throw new Error("Failed to fetch status");
-  return res.json();
+  return apiFetch("/api/status");
 }
 
 // ---------------------------------------------------------------------------
@@ -24,22 +56,11 @@ export async function fetchStatus(): Promise<StatusInfo> {
 // ---------------------------------------------------------------------------
 
 export async function fetchConfig(): Promise<unknown | null> {
-  const res = await fetch(`${BASE}/api/config`);
-  if (!res.ok) throw new Error("Failed to fetch config");
-  const data = await res.json();
-  return data; // null if no config file yet
+  return apiFetch("/api/config");
 }
 
 export async function saveConfig(config: unknown): Promise<void> {
-  const res = await fetch(`${BASE}/api/config`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to save config: ${text}`);
-  }
+  await apiPost("/api/config", config, "Failed to save config");
 }
 
 // ---------------------------------------------------------------------------
@@ -58,9 +79,7 @@ export interface GatewayStatus {
 }
 
 export async function fetchGatewayStatus(): Promise<GatewayStatus> {
-  const res = await fetch(`${BASE}/api/gateway/status`);
-  if (!res.ok) throw new Error("Failed to fetch gateway status");
-  return res.json();
+  return apiFetch("/api/gateway/status");
 }
 
 export interface GatewayUrl {
@@ -71,63 +90,31 @@ export interface GatewayUrl {
 }
 
 export async function fetchGatewayUrl(): Promise<GatewayUrl> {
-  const res = await fetch(`${BASE}/api/gateway/url`);
-  if (!res.ok) throw new Error("Failed to fetch gateway URL");
-  return res.json();
+  return apiFetch("/api/gateway/url");
 }
 
 export async function gatewayInstall(): Promise<{ ok: boolean; message: string }> {
-  const res = await fetch(`${BASE}/api/gateway/install`, { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text);
-  }
-  return res.json();
+  return apiPost("/api/gateway/install");
 }
 
 export async function gatewayStart(): Promise<{ ok: boolean; message: string }> {
-  const res = await fetch(`${BASE}/api/gateway/start`, { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text);
-  }
-  return res.json();
+  return apiPost("/api/gateway/start");
 }
 
 export async function gatewayRestart(): Promise<{ ok: boolean; message: string }> {
-  const res = await fetch(`${BASE}/api/gateway/restart`, { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text);
-  }
-  return res.json();
+  return apiPost("/api/gateway/restart");
 }
 
 export async function gatewayStop(): Promise<{ ok: boolean; message: string }> {
-  const res = await fetch(`${BASE}/api/gateway/stop`, { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text);
-  }
-  return res.json();
+  return apiPost("/api/gateway/stop");
 }
 
 export async function gatewayUninstall(): Promise<{ ok: boolean; message: string }> {
-  const res = await fetch(`${BASE}/api/gateway/uninstall`, { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text);
-  }
-  return res.json();
+  return apiPost("/api/gateway/uninstall");
 }
 
 export async function gatewayOpenDashboard(): Promise<{ ok: boolean; message: string }> {
-  const res = await fetch(`${BASE}/api/gateway/open-dashboard`, { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text);
-  }
-  return res.json();
+  return apiPost("/api/gateway/open-dashboard");
 }
 
 // ---------------------------------------------------------------------------
@@ -135,12 +122,16 @@ export async function gatewayOpenDashboard(): Promise<{ ok: boolean; message: st
 // ---------------------------------------------------------------------------
 
 export async function validateSudo(password: string): Promise<boolean> {
-  const res = await fetch(`${BASE}/api/sudo/validate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
-  });
-  return res.ok;
+  try {
+    await apiFetch<unknown>("/api/sudo/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function startInstall(
@@ -149,21 +140,17 @@ export async function startInstall(
   useHomebrew: boolean = false,
   useChinaMirror: boolean = true,
 ): Promise<string> {
-  const res = await fetch(`${BASE}/api/install`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password, verbose, use_homebrew: useHomebrew, use_china_mirror: useChinaMirror }),
+  const data = await apiPost<{ session_id: string }>("/api/install", {
+    password,
+    verbose,
+    use_homebrew: useHomebrew,
+    use_china_mirror: useChinaMirror,
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text);
-  }
-  const data = await res.json();
   return data.session_id;
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  await fetch(`${BASE}/api/sessions/${sessionId}`, { method: "DELETE" });
+  await apiFetch<unknown>(`/api/sessions/${sessionId}`, { method: "DELETE" }, "Failed to delete session");
 }
 
 // ---------------------------------------------------------------------------
@@ -176,9 +163,7 @@ export interface DeviceInfo {
 }
 
 export async function fetchDeviceSerial(): Promise<DeviceInfo> {
-  const res = await fetch(`${BASE}/api/device/serial`);
-  if (!res.ok) throw new Error("Failed to fetch device serial");
-  return res.json();
+  return apiFetch("/api/device/serial");
 }
 
 // ---------------------------------------------------------------------------
@@ -198,29 +183,11 @@ export interface OnboardRequest {
 }
 
 export async function runOnboard(req: OnboardRequest): Promise<{ ok: boolean; output: string }> {
-  const res = await fetch(`${BASE}/api/onboard`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Onboard failed");
-  }
-  return res.json();
+  return apiPost("/api/onboard", req, "Onboard failed");
 }
 
 export async function configSet(path: string, value: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`${BASE}/api/config/set`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, value }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Config set failed");
-  }
-  return res.json();
+  return apiPost("/api/config/set", { path, value }, "Config set failed");
 }
 
 // ---------------------------------------------------------------------------
@@ -228,12 +195,7 @@ export async function configSet(path: string, value: string): Promise<{ ok: bool
 // ---------------------------------------------------------------------------
 
 export async function runDoctor(): Promise<{ ok: boolean; output: string; exit_code?: number }> {
-  const res = await fetch(`${BASE}/api/doctor`, { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Doctor failed");
-  }
-  return res.json();
+  return apiPost("/api/doctor", undefined, "Doctor failed");
 }
 
 // ---------------------------------------------------------------------------
@@ -265,9 +227,7 @@ export interface ProvidersResponse {
 }
 
 export async function fetchProviders(): Promise<ProvidersResponse> {
-  const res = await fetch(`${BASE}/api/models/providers`);
-  if (!res.ok) throw new Error("Failed to fetch providers");
-  return res.json();
+  return apiFetch("/api/models/providers");
 }
 
 // ---------------------------------------------------------------------------
@@ -292,9 +252,7 @@ export interface SkillsResponse {
 }
 
 export async function fetchSkills(): Promise<SkillsResponse> {
-  const res = await fetch(`${BASE}/api/skills/list`);
-  if (!res.ok) throw new Error("Failed to fetch skills");
-  return res.json();
+  return apiFetch("/api/skills/list");
 }
 
 // ---------------------------------------------------------------------------
@@ -307,44 +265,19 @@ export interface ClawHubStatus {
 }
 
 export async function fetchClawHubStatus(): Promise<ClawHubStatus> {
-  const res = await fetch(`${BASE}/api/clawhub/status`);
-  if (!res.ok) throw new Error("Failed to check clawhub status");
-  return res.json();
+  return apiFetch("/api/clawhub/status");
 }
 
 export async function installClawHub(): Promise<{ ok: boolean }> {
-  const res = await fetch(`${BASE}/api/clawhub/install`, { method: "POST" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Failed to install clawhub");
-  }
-  return res.json();
+  return apiPost("/api/clawhub/install", undefined, "Failed to install clawhub");
 }
 
 export async function installClawHubSkill(url: string): Promise<{ ok: boolean; output?: string }> {
-  const res = await fetch(`${BASE}/api/clawhub/skill-install`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Failed to install skill");
-  }
-  return res.json();
+  return apiPost("/api/clawhub/skill-install", { url }, "Failed to install skill");
 }
 
 export async function uninstallClawHubSkill(slug: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`${BASE}/api/clawhub/skill-uninstall`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Failed to uninstall skill");
-  }
-  return res.json();
+  return apiPost("/api/clawhub/skill-uninstall", { slug }, "Failed to uninstall skill");
 }
 
 // ---------------------------------------------------------------------------
@@ -368,29 +301,15 @@ export interface HooksResponse {
 }
 
 export async function fetchHooks(): Promise<HooksResponse> {
-  const res = await fetch(`${BASE}/api/hooks/list`);
-  if (!res.ok) throw new Error("Failed to fetch hooks");
-  return res.json();
+  return apiFetch("/api/hooks/list");
 }
 
 export async function enableHook(name: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`${BASE}/api/hooks/enable`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) throw new Error("Failed to enable hook");
-  return res.json();
+  return apiPost("/api/hooks/enable", { name });
 }
 
 export async function disableHook(name: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`${BASE}/api/hooks/disable`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) throw new Error("Failed to disable hook");
-  return res.json();
+  return apiPost("/api/hooks/disable", { name });
 }
 
 // ---------------------------------------------------------------------------
@@ -410,13 +329,7 @@ export interface AuthLoginResponse {
 }
 
 export async function modelsAuthLogin(req: AuthLoginRequest): Promise<AuthLoginResponse> {
-  const res = await fetch(`${BASE}/api/models/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!res.ok) throw new Error("Auth login failed");
-  return res.json();
+  return apiPost("/api/models/auth/login", req);
 }
 
 export interface AuthStatusResponse {
@@ -426,9 +339,7 @@ export interface AuthStatusResponse {
 }
 
 export async function modelsAuthStatus(provider: string): Promise<AuthStatusResponse> {
-  const res = await fetch(`${BASE}/api/models/auth/status?provider=${encodeURIComponent(provider)}`);
-  if (!res.ok) throw new Error("Auth status check failed");
-  return res.json();
+  return apiFetch(`/api/models/auth/status?provider=${encodeURIComponent(provider)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -498,9 +409,7 @@ export interface OpenClawStatus {
 }
 
 export async function fetchOpenClawStatus(): Promise<OpenClawStatus> {
-  const res = await fetch(`${BASE}/api/openclaw/status`);
-  if (!res.ok) throw new Error("Failed to fetch OpenClaw status");
-  return res.json();
+  return apiFetch("/api/openclaw/status");
 }
 
 // ---------------------------------------------------------------------------
@@ -548,9 +457,7 @@ export interface UsageStats {
 }
 
 export async function fetchUsageStats(days: number = 30): Promise<UsageStats> {
-  const res = await fetch(`${BASE}/api/usage?days=${days}`);
-  if (!res.ok) throw new Error("Failed to fetch usage stats");
-  return res.json();
+  return apiFetch(`/api/usage?days=${days}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -558,12 +465,6 @@ export async function fetchUsageStats(days: number = 30): Promise<UsageStats> {
 // ---------------------------------------------------------------------------
 
 export async function pluginsEnable(name: string): Promise<{ ok: boolean; output: string }> {
-  const res = await fetch(`${BASE}/api/plugins/enable`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) throw new Error("Plugin enable failed");
-  return res.json();
+  return apiPost("/api/plugins/enable", { name });
 }
 

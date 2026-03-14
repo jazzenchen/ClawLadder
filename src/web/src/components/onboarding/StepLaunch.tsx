@@ -27,7 +27,7 @@ import type { ProviderEntry } from "./StepModels";
 import { useOnboardingStore } from "../../stores/onboarding";
 
 // Re-export the metadata lookup so we can use it here
-import { getProviderMeta } from "./StepModels";
+import { getProviderMeta } from "./providerMeta";
 
 // ── Props ──────────────────────────────────────────────────────────────────
 

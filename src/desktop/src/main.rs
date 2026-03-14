@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use clawladder_core::logger::Logger;
-use std::path::PathBuf;
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -28,8 +27,11 @@ fn main() {
     let server_logger = logger.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        let dist_dir = find_web_dist();
-        rt.block_on(server::run_server(3145, dist_dir, server_logger));
+        let dist_dir = clawladder_core::path_utils::find_web_dist();
+        if let Err(e) = rt.block_on(server::run_server(3145, dist_dir, server_logger)) {
+            tracing::error!("Server failed to start: {}", e);
+            eprintln!("Server error: {}", e);
+        }
     });
 
     // Small delay to let server bind
@@ -57,27 +59,4 @@ fn main() {
         .expect("error while running tauri application");
 
     tracing::info!("Application shutting down");
-}
-
-fn find_web_dist() -> PathBuf {
-    // Inside .app bundle: Contents/Resources/web/dist
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(macos_dir) = exe.parent() {
-            let resources = macos_dir.join("../Resources/web/dist");
-            if resources.exists() {
-                return resources;
-            }
-        }
-    }
-    // Fallback for dev
-    let candidates = [
-        PathBuf::from("../web/dist"),
-        PathBuf::from("web/dist"),
-    ];
-    for p in &candidates {
-        if p.exists() {
-            return p.clone();
-        }
-    }
-    PathBuf::from("../web/dist")
 }

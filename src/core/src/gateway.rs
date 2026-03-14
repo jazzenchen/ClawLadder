@@ -45,7 +45,7 @@ pub struct GatewayStatus {
 // ---------------------------------------------------------------------------
 
 /// Run an openclaw command via login shell and return (stdout, stderr, success).
-fn run_openclaw_cmd(args: &str) -> (String, String, bool) {
+pub fn run_openclaw_cmd(args: &str) -> (String, String, bool) {
     let bin = crate::path_utils::resolve_openclaw_bin();
     let cmd = format!("{} {}", bin, args);
     let shell = crate::path_utils::user_shell();
@@ -74,9 +74,9 @@ fn run_gateway_lifecycle(subcmd: &str) -> Result<String, String> {
     }
 }
 
-/// Extract the first JSON object from stdout (skip any banner/warning lines).
+/// Extract the first JSON value (object or array) from stdout (skip any banner/warning lines).
 fn extract_json(stdout: &str) -> Option<serde_json::Value> {
-    let start = stdout.find('{')?;
+    let start = stdout.find('{').or_else(|| stdout.find('['))?;
     serde_json::from_str(&stdout[start..]).ok()
 }
 

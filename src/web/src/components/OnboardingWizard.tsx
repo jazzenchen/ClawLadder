@@ -10,7 +10,7 @@ import { StepSkills } from "./onboarding/StepSkills";
 import { StepHooks } from "./onboarding/StepHooks";
 import { StepLaunch } from "./onboarding/StepLaunch";
 
-import { useOnboardingStore, STEPS, type StepId } from "../stores/onboarding";
+import { useOnboardingStore, STEPS, selectStepId, type StepId } from "../stores/onboarding";
 
 // ── Props ──────────────────────────────────────────────────────────────────
 
@@ -22,13 +22,12 @@ interface Props {
 // ── Component ──────────────────────────────────────────────────────────────
 
 export function OnboardingWizard({ onComplete, onExit }: Props) {
-  const step = useOnboardingStore((s) => s.step);
+  const step = useOnboardingStore(selectStepId);
+  const stepIndex = useOnboardingStore((s) => s.stepIndex);
   const maxStepReached = useOnboardingStore((s) => s.maxStepReached);
   const goToStep = useOnboardingStore((s) => s.goToStep);
   const goNext = useOnboardingStore((s) => s.goNext);
   const goBack = useOnboardingStore((s) => s.goBack);
-
-  const stepIndex = STEPS.findIndex((s) => s.id === step);
 
   return (
     <div className="h-full min-h-0 w-full max-w-4xl mx-auto flex flex-col p-6">

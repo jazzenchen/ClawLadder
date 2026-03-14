@@ -25,28 +25,31 @@ impl std::fmt::Display for SessionId {
 /// Fixed-capacity circular scrollback buffer (bytes).
 const SCROLLBACK_CAP: usize = 2 * 1024 * 1024; // 2 MiB
 
+use std::collections::VecDeque;
+
 pub struct CircularBuffer {
-    data: std::sync::Mutex<Vec<u8>>,
+    data: std::sync::Mutex<VecDeque<u8>>,
 }
 
 impl CircularBuffer {
     pub fn new() -> Self {
         Self {
-            data: std::sync::Mutex::new(Vec::new()),
+            data: std::sync::Mutex::new(VecDeque::new()),
         }
     }
 
     pub fn push(&self, bytes: &[u8]) {
         let mut g = self.data.lock().expect("buffer mutex");
-        g.extend_from_slice(bytes);
+        g.extend(bytes.iter().copied());
         if g.len() > SCROLLBACK_CAP {
             let excess = g.len() - SCROLLBACK_CAP;
-            g.drain(..excess);
+            drop(g.drain(..excess));
         }
     }
 
     pub fn dump(&self) -> Vec<u8> {
-        self.data.lock().expect("buffer mutex").clone()
+        let g = self.data.lock().expect("buffer mutex");
+        g.iter().copied().collect()
     }
 }
 

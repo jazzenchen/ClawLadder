@@ -338,22 +338,9 @@ fn extract_date_from_timestamp(ts: &Option<serde_json::Value>) -> Option<String>
     }
 }
 
-/// Convert epoch seconds to "YYYY-MM-DD" (UTC). Simple civil-date calculation.
+/// Convert epoch seconds to "YYYY-MM-DD" (UTC).
 fn epoch_secs_to_date(secs: u64) -> Option<String> {
-    // Days since 1970-01-01
-    let days = (secs / 86400) as i64;
-    // Algorithm from Howard Hinnant's date library (civil_from_days)
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = (yoe as i64) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    Some(format!("{:04}-{:02}-{:02}", y, m, d))
+    crate::date_utils::epoch_secs_to_date(secs)
 }
 
 /// Get the cutoff date string "YYYY-MM-DD" for N days ago.

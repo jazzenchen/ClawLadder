@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Copy,
   Check,
@@ -44,7 +44,6 @@ import {
   fetchGatewayStatus,
   fetchGatewayUrl,
   fetchOpenClawStatus,
-  fetchDeviceSerial,
   gatewayInstall,
   gatewayStart,
   gatewayRestart,
@@ -63,6 +62,7 @@ interface DashboardProps {
   installed: boolean;
   version?: string;
   onResetConfig: () => void;
+  deviceInfo?: DeviceInfo | null;
 }
 
 async function openExternal(url: string) {
@@ -83,11 +83,7 @@ async function openExternal(url: string) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
+import { formatTokens } from "../lib/format";
 
 function formatAge(ms: number | null): string {
   if (ms == null) return "—";
@@ -279,7 +275,7 @@ function ActionButton({
 // Dashboard
 // ---------------------------------------------------------------------------
 
-export function Dashboard({ installed, version, onResetConfig }: DashboardProps) {
+export function Dashboard({ installed, version, onResetConfig, deviceInfo }: DashboardProps) {
   const [gwStatus, setGwStatus] = useState<GatewayStatus | null>(null);
   const [gwUrl, setGwUrl] = useState<GatewayUrl | null>(null);
   const [ocStatus, setOcStatus] = useState<OpenClawStatus | null>(null);
@@ -287,10 +283,10 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
+  const tokenCopiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [openingDashboard, setOpeningDashboard] = useState(false);
   const [doctorOutput, setDoctorOutput] = useState<string | null>(null);
   const [usageDialogOpen, setUsageDialogOpen] = useState(false);
-  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
 
   const [pendingAction, setPendingAction] = useState<{
     key: string;
@@ -320,17 +316,17 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
     }
   }, []);
 
-  // Fetch device info once on mount
-  useEffect(() => {
-    fetchDeviceSerial().then(setDeviceInfo).catch(() => {});
-  }, []);
-
   const isRunning = gwStatus?.running ?? false;
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, isRunning ? 15_000 : 5_000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, isRunning ? 15_000 : 5_000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(tokenCopiedTimerRef.current);
+    };
   }, [refresh, isRunning]);
 
   const tokenStats = useMemo(() => {
@@ -553,7 +549,7 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
           <StatCard
             icon={<Radio className="w-4 h-4" />}
             label="通讯工具"
-            value={String(ocStatus?.channelSummary?.length ?? 0)}
+            value={String(ocStatus?.channelSummary?.filter(l => !l.startsWith("  ")).length ?? 0)}
             subtext={
               ocStatus?.channelSummary?.[0] ? (
                 <span>{ocStatus.channelSummary[0]}</span>
@@ -563,7 +559,7 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
               <div className="space-y-1.5">
                 <p className="font-medium text-foreground mb-2">通讯工具列表</p>
                 {ocStatus.channelSummary.map((ch, i) => (
-                  <DetailRow key={i} label={`#${i + 1}`} value={ch} />
+                  <DetailRow key={i} label={ch.startsWith("  ") ? "" : `#${ocStatus!.channelSummary!.slice(0, i).filter(l => !l.startsWith("  ")).length + 1}`} value={ch.trim()} />
                 ))}
               </div>
             ) : undefined}
@@ -736,7 +732,8 @@ export function Dashboard({ installed, version, onResetConfig }: DashboardProps)
                       onClick={() => {
                         navigator.clipboard.writeText(gwUrl.token).then(() => {
                           setTokenCopied(true);
-                          setTimeout(() => setTokenCopied(false), 2000);
+                          clearTimeout(tokenCopiedTimerRef.current);
+                          tokenCopiedTimerRef.current = setTimeout(() => setTokenCopied(false), 2000);
                         });
                       }}
                     >

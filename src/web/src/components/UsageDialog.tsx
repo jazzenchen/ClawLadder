@@ -26,16 +26,11 @@ import {
   type DailyUsage,
   type GroupedUsage,
 } from "@/lib/api";
+import { formatTokens } from "@/lib/format";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 function fmtCost(n: number): string {
   if (n === 0) return "$0";
@@ -78,7 +73,7 @@ function MiniBar({ items, maxVal }: { items: { label: string; value: number; col
               }}
             />
           </div>
-          <span className="w-14 text-right font-mono text-foreground shrink-0">{fmtTokens(item.value)}</span>
+          <span className="w-14 text-right font-mono text-foreground shrink-0">{formatTokens(item.value)}</span>
         </div>
       ))}
     </div>
@@ -112,20 +107,20 @@ function DailyTable({ daily }: { daily: DailyUsage[] }) {
             <td className="py-1.5 pr-1 text-right font-mono">
               <span className="inline-flex items-center gap-0.5 text-primary">
                 <ArrowUpRight className="w-3 h-3 shrink-0" />
-                {fmtTokens(d.input_tokens)}
+                {formatTokens(d.input_tokens)}
               </span>
             </td>
             <td className="py-1.5 pr-1 text-right font-mono">
               <span className="inline-flex items-center gap-0.5 text-secondary">
                 <ArrowDownRight className="w-3 h-3 shrink-0" />
-                {fmtTokens(d.output_tokens)}
+                {formatTokens(d.output_tokens)}
               </span>
             </td>
             <td className="py-1.5 pr-1 text-right font-mono text-foreground font-medium">
-              {fmtTokens(d.total_tokens)}
+              {formatTokens(d.total_tokens)}
             </td>
             <td className="py-1.5 pr-1 text-right font-mono text-muted-foreground">
-              {fmtTokens(d.cache_read)}
+              {formatTokens(d.cache_read)}
             </td>
             <td className="py-1.5 pr-2 text-right font-mono text-muted-foreground">
               {d.requests}
@@ -178,9 +173,9 @@ function GroupedBreakdown({ items, label }: { items: GroupedUsage[]; label: stri
           {items.map((item) => (
             <tr key={item.key} className="hover:bg-muted/30 transition-colors">
               <td className="py-1.5 pl-2 text-muted-foreground truncate overflow-hidden" title={item.key}>{shortKey(item.key)}</td>
-              <td className="py-1.5 text-right font-mono text-primary">{fmtTokens(item.input_tokens)}</td>
-              <td className="py-1.5 text-right font-mono text-secondary">{fmtTokens(item.output_tokens)}</td>
-              <td className="py-1.5 text-right font-mono text-foreground font-medium">{fmtTokens(item.total_tokens)}</td>
+              <td className="py-1.5 text-right font-mono text-primary">{formatTokens(item.input_tokens)}</td>
+              <td className="py-1.5 text-right font-mono text-secondary">{formatTokens(item.output_tokens)}</td>
+              <td className="py-1.5 text-right font-mono text-foreground font-medium">{formatTokens(item.total_tokens)}</td>
               <td className="py-1.5 pr-2 text-right font-mono text-muted-foreground">{item.requests}</td>
             </tr>
           ))}
@@ -287,10 +282,10 @@ export function UsageDialog({ open, onOpenChange }: UsageDialogProps) {
             <div className="grid grid-cols-3 gap-3">
               <Card className="p-3 bg-card/50 border-border/30">
                 <p className="text-[10px] text-muted-foreground mb-1">总 Token</p>
-                <p className="text-lg font-bold text-foreground">{fmtTokens(t?.total_tokens ?? 0)}</p>
+                <p className="text-lg font-bold text-foreground">{formatTokens(t?.total_tokens ?? 0)}</p>
                 <div className="flex gap-2 text-[10px] mt-0.5">
-                  <span className="text-primary flex items-center"><ArrowUpRight className="w-2.5 h-2.5" />{fmtTokens(t?.input_tokens ?? 0)}</span>
-                  <span className="text-secondary flex items-center"><ArrowDownRight className="w-2.5 h-2.5" />{fmtTokens(t?.output_tokens ?? 0)}</span>
+                  <span className="text-primary flex items-center"><ArrowUpRight className="w-2.5 h-2.5" />{formatTokens(t?.input_tokens ?? 0)}</span>
+                  <span className="text-secondary flex items-center"><ArrowDownRight className="w-2.5 h-2.5" />{formatTokens(t?.output_tokens ?? 0)}</span>
                 </div>
               </Card>
               <Card className="p-3 bg-card/50 border-border/30">

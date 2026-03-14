@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -73,6 +73,7 @@ export function Settings({ onBack }: SettingsProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [error, setError] = useState<string | null>(null);
 
   // Load config on mount
@@ -89,6 +90,7 @@ export function Settings({ onBack }: SettingsProps) {
         setLoading(false);
       }
     })();
+    return () => clearTimeout(savedTimerRef.current);
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -98,7 +100,8 @@ export function Settings({ onBack }: SettingsProps) {
     try {
       await saveConfig(config);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -168,8 +171,8 @@ export function Settings({ onBack }: SettingsProps) {
     }
   };
 
-  const removeSkill = (index: number) => {
-    const updated = skills.filter((_, i) => i !== index);
+  const removeSkill = (name: string) => {
+    const updated = skills.filter((s) => s !== name);
     setConfig({ ...config, skills: updated });
   };
 
@@ -213,7 +216,7 @@ export function Settings({ onBack }: SettingsProps) {
           {/* ============ Providers Tab ============ */}
           <TabsContent value="providers" className="flex flex-col gap-4">
             {providers.map((p, i) => (
-              <Card key={i}>
+              <Card key={p.provider || i}>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center justify-between">
                     <span>Provider #{i + 1}</span>
@@ -301,7 +304,7 @@ export function Settings({ onBack }: SettingsProps) {
           {/* ============ Channels Tab ============ */}
           <TabsContent value="channels" className="flex flex-col gap-4">
             {channels.map((ch, i) => (
-              <Card key={i}>
+              <Card key={`${ch.type}-${i}`}>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center justify-between">
                     <span>Channel #{i + 1}</span>
@@ -439,14 +442,14 @@ export function Settings({ onBack }: SettingsProps) {
                 {skills.length === 0 && (
                   <p className="text-sm text-muted-foreground">暂无已启用的 skill</p>
                 )}
-                {skills.map((skill, i) => (
-                  <div key={i} className="flex items-center justify-between bg-muted rounded-md px-3 py-2">
+                {skills.map((skill) => (
+                  <div key={skill} className="flex items-center justify-between bg-muted rounded-md px-3 py-2">
                     <span className="text-sm font-mono">{skill}</span>
                     <Button
                       variant="ghost"
                       size="sm"
                       className="text-destructive h-6 px-2"
-                      onClick={() => removeSkill(i)}
+                      onClick={() => removeSkill(skill)}
                     >
                       移除
                     </Button>

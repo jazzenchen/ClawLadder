@@ -28,7 +28,7 @@ struct AppState {
     logger: Logger,
 }
 
-pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) {
+pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) -> Result<(), String> {
     let install_script = find_install_script();
     tracing::info!(path = %install_script.display(), "Install script located");
 
@@ -95,8 +95,13 @@ pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) {
     let addr = format!("127.0.0.1:{}", port);
     tracing::info!(addr = %addr, "Server running");
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
+        format!("无法绑定端口 {} — 可能已被占用: {}", port, e)
+    })?;
+    axum::serve(listener, app).await.map_err(|e| {
+        format!("服务器运行出错: {}", e)
+    })?;
+    Ok(())
 }
 
 fn find_install_script() -> PathBuf {
@@ -229,19 +234,11 @@ fn get_macos_hardware_uuid() -> Option<String> {
 /// Check if ClawLadder is installed and/or running.
 async fn check_status() -> Json<serde_json::Value> {
     let (installed, version) = tokio::task::spawn_blocking(|| {
-        // 1. Try the resolved binary path (saved or probed via $SHELL)
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let shell = clawladder_core::path_utils::user_shell();
-        let cmd_str = format!("{} --version", bin);
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(o) if o.status.success() => {
-                let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                (true, Some(ver))
-            }
-            _ => (false, None),
+        let (stdout, _stderr, success) = run_openclaw_raw("--version");
+        if success {
+            (true, Some(stdout.trim().to_string()))
+        } else {
+            (false, None)
         }
     })
     .await
@@ -1041,23 +1038,11 @@ async fn get_gateway_url() -> Json<serde_json::Value> {
 /// POST /api/gateway/open-dashboard — run `openclaw dashboard` to open the Control UI with auth
 async fn gateway_open_dashboard_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let result = tokio::task::spawn_blocking(|| {
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let cmd_str = format!("{} dashboard", bin);
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                if out.status.success() {
-                    Ok(stdout)
-                } else {
-                    Err(if stderr.is_empty() { stdout } else { stderr })
-                }
-            }
-            Err(e) => Err(format!("Failed to run openclaw dashboard: {}", e)),
+        let (stdout, stderr, success) = run_openclaw_raw("dashboard");
+        if success {
+            Ok(stdout)
+        } else {
+            Err(if stderr.is_empty() { stdout } else { stderr })
         }
     })
     .await
@@ -1265,30 +1250,15 @@ async fn run_onboard_handler(
 
     args.push("--json".to_string());
 
-    let cmd_str = format!("{} {}", clawladder_core::path_utils::resolve_openclaw_bin(), args.join(" "));
-    tracing::info!(cmd = %cmd_str, "Running onboard");
+    let cmd_args = args.join(" ");
+    tracing::info!(cmd = %cmd_args, "Running onboard");
 
     let result = tokio::task::spawn_blocking(move || {
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                if output.status.success() {
-                    Ok(stdout)
-                } else {
-                    Err(format!(
-                        "onboard failed (exit {}): {}{}",
-                        output.status.code().unwrap_or(-1),
-                        stderr,
-                        if stderr.is_empty() { &stdout } else { "" }
-                    ))
-                }
-            }
-            Err(e) => Err(format!("Failed to run openclaw onboard: {}", e)),
+        let (stdout, stderr, success) = run_openclaw_raw(&cmd_args);
+        if success {
+            Ok(stdout)
+        } else {
+            Err(format!("onboard failed: {}{}", stderr, if stderr.is_empty() { &stdout } else { "" }))
         }
     })
     .await
@@ -1315,27 +1285,14 @@ async fn run_doctor_handler() -> Result<Json<serde_json::Value>, (StatusCode, St
     tracing::info!("Doctor requested");
 
     let result = tokio::task::spawn_blocking(|| {
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let cmd_str = format!("{} doctor --repair --non-interactive", bin);
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                if output.status.success() {
-                    Ok(serde_json::json!({ "ok": true, "output": stdout }))
-                } else {
-                    Ok(serde_json::json!({
-                        "ok": false,
-                        "output": format!("{}{}", stdout, stderr),
-                        "exit_code": output.status.code(),
-                    }))
-                }
-            }
-            Err(e) => Err(format!("Failed to run openclaw doctor: {}", e)),
+        let (stdout, stderr, success) = run_openclaw_raw("doctor --repair --non-interactive");
+        if success {
+            Ok(serde_json::json!({ "ok": true, "output": stdout }))
+        } else {
+            Ok(serde_json::json!({
+                "ok": false,
+                "output": format!("{}{}", stdout, stderr),
+            }))
         }
     })
     .await
@@ -1367,31 +1324,19 @@ struct ConfigSetRequest {
 async fn config_set_handler(
     Json(body): Json<ConfigSetRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-    let cmd_str = format!(
-        "{} config set {} {}",
-        bin,
+    let args = format!(
+        "config set {} {}",
         shell_escape(&body.path),
         shell_escape(&body.value)
     );
-    tracing::info!(cmd = %cmd_str, "Config set");
+    tracing::info!(cmd = %args, "Config set");
 
     let result = tokio::task::spawn_blocking(move || {
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                if output.status.success() {
-                    Ok(stdout)
-                } else {
-                    Err(format!("config set failed: {}{}", stderr, if stderr.is_empty() { &stdout } else { "" }))
-                }
-            }
-            Err(e) => Err(format!("Failed to run openclaw config set: {}", e)),
+        let (stdout, stderr, success) = run_openclaw_raw(&args);
+        if success {
+            Ok(stdout)
+        } else {
+            Err(format!("config set failed: {}{}", stderr, if stderr.is_empty() { &stdout } else { "" }))
         }
     })
     .await
@@ -1411,76 +1356,52 @@ async fn config_set_handler(
 async fn list_providers_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let result = tokio::task::spawn_blocking(|| {
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let cmd_str = format!("{} models list --all --json", bin);
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                // JSON may be preceded by warning lines; find the first `{`
-                let json_str = match stdout.find('{') {
-                    Some(pos) => &stdout[pos..],
-                    None => return Err("No JSON in openclaw models list output".to_string()),
-                };
-                let val: serde_json::Value = serde_json::from_str(json_str)
-                    .map_err(|e| format!("Failed to parse models JSON: {}", e))?;
+        let val = run_openclaw_json("models list --all --json")?;
 
-                // Extract unique providers with their models
-                let mut providers: std::collections::BTreeMap<String, Vec<serde_json::Value>> =
-                    std::collections::BTreeMap::new();
-                if let Some(models) = val.get("models").and_then(|m| m.as_array()) {
-                    for m in models {
-                        let key = m.get("key").and_then(|k| k.as_str()).unwrap_or("");
-                        if let Some(slash) = key.find('/') {
-                            let provider = &key[..slash];
-                            let model_id = &key[slash + 1..];
-                            providers
-                                .entry(provider.to_string())
-                                .or_default()
-                                .push(serde_json::json!({
-                                    "id": model_id,
-                                    "key": key,
-                                    "name": m.get("name").and_then(|n| n.as_str()).unwrap_or(model_id),
-                                    "input": m.get("input").and_then(|i| i.as_str()).unwrap_or("text"),
-                                    "contextWindow": m.get("contextWindow").and_then(|c| c.as_u64()).unwrap_or(0),
-                                    "available": m.get("available").and_then(|a| a.as_bool()).unwrap_or(false),
-                                    "local": m.get("local").and_then(|l| l.as_bool()).unwrap_or(false),
-                                    "tags": m.get("tags").cloned().unwrap_or(serde_json::Value::Array(vec![])),
-                                }));
-                        }
-                    }
+        // Extract unique providers with their models
+        let mut providers: std::collections::BTreeMap<String, Vec<serde_json::Value>> =
+            std::collections::BTreeMap::new();
+        if let Some(models) = val.get("models").and_then(|m| m.as_array()) {
+            for m in models {
+                let key = m.get("key").and_then(|k| k.as_str()).unwrap_or("");
+                if let Some(slash) = key.find('/') {
+                    let provider = &key[..slash];
+                    let model_id = &key[slash + 1..];
+                    providers
+                        .entry(provider.to_string())
+                        .or_default()
+                        .push(serde_json::json!({
+                            "id": model_id,
+                            "key": key,
+                            "name": m.get("name").and_then(|n| n.as_str()).unwrap_or(model_id),
+                            "input": m.get("input").and_then(|i| i.as_str()).unwrap_or("text"),
+                            "contextWindow": m.get("contextWindow").and_then(|c| c.as_u64()).unwrap_or(0),
+                            "available": m.get("available").and_then(|a| a.as_bool()).unwrap_or(false),
+                            "local": m.get("local").and_then(|l| l.as_bool()).unwrap_or(false),
+                            "tags": m.get("tags").cloned().unwrap_or(serde_json::Value::Array(vec![])),
+                        }));
                 }
-
-                let provider_list: Vec<serde_json::Value> = providers
-                    .into_iter()
-                    .map(|(name, models)| {
-                        // Determine if this is a built-in provider (has models in catalog)
-                        // or a custom one (user-configured)
-                        let is_custom = name.starts_with("custom");
-                        serde_json::json!({
-                            "id": name,
-                            "label": provider_display_name(&name),
-                            "builtin": !is_custom,
-                            "modelCount": models.len(),
-                            "models": models,
-                        })
-                    })
-                    .collect();
-
-                Ok(serde_json::json!({
-                    "providers": provider_list,
-                    "totalModels": val.get("count").and_then(|c| c.as_u64()).unwrap_or(0),
-                }))
             }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                Err(format!("openclaw models list failed: {}", stderr))
-            }
-            Err(e) => Err(format!("Failed to run openclaw models list: {}", e)),
         }
+
+        let provider_list: Vec<serde_json::Value> = providers
+            .into_iter()
+            .map(|(name, models)| {
+                let is_custom = name.starts_with("custom");
+                serde_json::json!({
+                    "id": name,
+                    "label": provider_display_name(&name),
+                    "builtin": !is_custom,
+                    "modelCount": models.len(),
+                    "models": models,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "providers": provider_list,
+            "totalModels": val.get("count").and_then(|c| c.as_u64()).unwrap_or(0),
+        }))
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join error: {}", e)))?;
@@ -1498,30 +1419,11 @@ async fn list_models_handler(
     let provider_filter = query.get("provider").cloned();
 
     let result = tokio::task::spawn_blocking(move || {
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let mut cmd_str = format!("{} models list --all --json", bin);
+        let mut args = "models list --all --json".to_string();
         if let Some(ref p) = provider_filter {
-            cmd_str.push_str(&format!(" --provider {}", shell_escape(p)));
+            args.push_str(&format!(" --provider {}", shell_escape(p)));
         }
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let json_str = match stdout.find('{') {
-                    Some(pos) => &stdout[pos..],
-                    None => return Err("No JSON in output".to_string()),
-                };
-                serde_json::from_str::<serde_json::Value>(json_str)
-                    .map_err(|e| format!("Failed to parse: {}", e))
-            }
-            Ok(output) => {
-                Err(String::from_utf8_lossy(&output.stderr).to_string())
-            }
-            Err(e) => Err(format!("Failed to run: {}", e)),
-        }
+        run_openclaw_json(&args)
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join error: {}", e)))?;
@@ -1577,30 +1479,23 @@ async fn openclaw_status_handler() -> Result<Json<serde_json::Value>, (StatusCod
     }
 }
 
+/// Helper: run an openclaw CLI command and return raw (stdout, stderr, success).
+fn run_openclaw_raw(args: &str) -> (String, String, bool) {
+    clawladder_core::gateway::run_openclaw_cmd(args)
+}
+
 /// Helper: run an openclaw CLI command and return parsed JSON
 fn run_openclaw_json(args: &str) -> Result<serde_json::Value, String> {
-    let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-    let cmd_str = format!("{} {}", bin, args);
-    let shell = clawladder_core::path_utils::user_shell();
-    let mut cmd = std::process::Command::new(&shell);
-    cmd.args(["-lc", &cmd_str]);
-    clawladder_core::path_utils::apply_rich_env(&mut cmd);
-    match cmd.output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            if !output.status.success() {
-                return Err(format!("{}{}", stderr, if stderr.is_empty() { &stdout } else { "" }));
-            }
-            // JSON may be preceded by warning/banner lines
-            let json_start = stdout.find('{').or_else(|| stdout.find('['));
-            match json_start {
-                Some(pos) => serde_json::from_str(&stdout[pos..])
-                    .map_err(|e| format!("JSON parse error: {}", e)),
-                None => Err(format!("No JSON in output: {}", &stdout[..stdout.len().min(200)])),
-            }
-        }
-        Err(e) => Err(format!("Failed to run {}: {}", cmd_str, e)),
+    let (stdout, stderr, success) = run_openclaw_raw(args);
+    if !success {
+        return Err(format!("{}{}", stderr, if stderr.is_empty() { &stdout } else { "" }));
+    }
+    // JSON may be preceded by warning/banner lines
+    let json_start = stdout.find('{').or_else(|| stdout.find('['));
+    match json_start {
+        Some(pos) => serde_json::from_str(&stdout[pos..])
+            .map_err(|e| format!("JSON parse error: {}", e)),
+        None => Err(format!("No JSON in output: {}", &stdout[..stdout.len().min(200)])),
     }
 }
 
@@ -1637,17 +1532,8 @@ async fn hook_enable_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let name = body.name;
     let result = tokio::task::spawn_blocking(move || {
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let cmd_str = format!("{} hooks enable {}", bin, shell_escape(&name));
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(output) if output.status.success() => Ok(()),
-            Ok(output) => Err(String::from_utf8_lossy(&output.stderr).to_string()),
-            Err(e) => Err(format!("Failed: {}", e)),
-        }
+        let (_stdout, _stderr, success) = run_openclaw_raw(&format!("hooks enable {}", shell_escape(&name)));
+        if success { Ok(()) } else { Err(_stderr) }
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
@@ -1663,17 +1549,8 @@ async fn hook_disable_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let name = body.name;
     let result = tokio::task::spawn_blocking(move || {
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let cmd_str = format!("{} hooks disable {}", bin, shell_escape(&name));
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(output) if output.status.success() => Ok(()),
-            Ok(output) => Err(String::from_utf8_lossy(&output.stderr).to_string()),
-            Err(e) => Err(format!("Failed: {}", e)),
-        }
+        let (_stdout, _stderr, success) = run_openclaw_raw(&format!("hooks disable {}", shell_escape(&name)));
+        if success { Ok(()) } else { Err(_stderr) }
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
@@ -1843,28 +1720,26 @@ async fn models_auth_login_handler(
     let needs_browser = setup_token.is_none() && auth_choice.is_none();
 
     let result = tokio::task::spawn_blocking(move || {
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let cmd_str = if let Some(token) = &setup_token {
+        let cmd_args = if let Some(token) = &setup_token {
             format!(
-                "{} models auth setup-token --provider {} --token {}",
-                bin,
+                "models auth setup-token --provider {} --token {}",
                 shell_escape(&provider),
                 shell_escape(token)
             )
         } else if let Some(choice) = &auth_choice {
             format!(
-                "{} onboard --non-interactive --mode local --auth-choice {} --skip-channels --skip-skills --skip-search --skip-health --skip-ui",
-                bin,
+                "onboard --non-interactive --mode local --auth-choice {} --skip-channels --skip-skills --skip-search --skip-health --skip-ui",
                 shell_escape(choice)
             )
         } else {
             format!(
-                "{} models auth login --provider {} --set-default",
-                bin,
+                "models auth login --provider {} --set-default",
                 shell_escape(&provider)
             )
         };
 
+        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
+        let cmd_str = format!("{} {}", bin, cmd_args);
         tracing::info!("Auth login command: {} (needs_browser={})", cmd_str, needs_browser);
 
         if needs_browser {
@@ -1872,7 +1747,12 @@ async fn models_auth_login_handler(
             run_with_browser_intercept(&cmd_str)
         } else {
             // Simple blocking execution — no URL interception
-            run_simple(&cmd_str)
+            let (stdout, stderr, success) = run_openclaw_raw(&cmd_args);
+            if success {
+                Ok(serde_json::json!({ "ok": true, "output": stdout }))
+            } else {
+                Ok(serde_json::json!({ "ok": false, "output": format!("{}{}", stdout, stderr) }))
+            }
         }
     })
     .await
@@ -1881,26 +1761,6 @@ async fn models_auth_login_handler(
     match result {
         Ok(val) => Ok(Json(val)),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
-    }
-}
-
-/// Run a command, capture output, return JSON result. No URL interception.
-fn run_simple(cmd_str: &str) -> Result<serde_json::Value, String> {
-    let shell = clawladder_core::path_utils::user_shell();
-    let mut cmd = std::process::Command::new(&shell);
-    cmd.args(["-lc", cmd_str]);
-    clawladder_core::path_utils::apply_rich_env(&mut cmd);
-    match cmd.output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            if output.status.success() {
-                Ok(serde_json::json!({ "ok": true, "output": stdout }))
-            } else {
-                Ok(serde_json::json!({ "ok": false, "output": format!("{}{}", stdout, stderr) }))
-            }
-        }
-        Err(e) => Err(format!("Failed: {}", e)),
     }
 }
 
@@ -2070,23 +1930,11 @@ async fn plugins_enable_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let name = body.name;
     let result = tokio::task::spawn_blocking(move || {
-        let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let cmd_str = format!("{} plugins enable {}", bin, shell_escape(&name));
-        let shell = clawladder_core::path_utils::user_shell();
-        let mut cmd = std::process::Command::new(&shell);
-        cmd.args(["-lc", &cmd_str]);
-        clawladder_core::path_utils::apply_rich_env(&mut cmd);
-        match cmd.output() {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                if output.status.success() {
-                    Ok(serde_json::json!({ "ok": true, "output": stdout }))
-                } else {
-                    Err(format!("{}{}", stderr, stdout))
-                }
-            }
-            Err(e) => Err(format!("Failed: {}", e)),
+        let (stdout, stderr, success) = run_openclaw_raw(&format!("plugins enable {}", shell_escape(&name)));
+        if success {
+            Ok(serde_json::json!({ "ok": true, "output": stdout }))
+        } else {
+            Err(format!("{}{}", stderr, stdout))
         }
     })
     .await
