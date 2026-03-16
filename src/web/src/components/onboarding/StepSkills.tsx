@@ -299,7 +299,7 @@ export function StepSkills({ onNext, onBack }: Props) {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Package className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm font-medium">内置 Skills</span>
+                <span className="text-sm ">内置 Skills</span>
                 {!loading && (
                   <Badge variant="secondary" className="text-xs">
                     {skills.length} 个可用

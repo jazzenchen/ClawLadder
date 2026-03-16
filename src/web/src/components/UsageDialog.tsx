@@ -1,186 +1,183 @@
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
-  BarChart3,
-  Users,
-  Cpu,
+  Zap,
+  Hash,
   Layers,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
 } from "@/components/ui/dialog";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
 import {
   fetchUsageStats,
   type UsageStats,
-  type DailyUsage,
   type GroupedUsage,
+  type UsageRecord,
 } from "@/lib/api";
-import { formatTokens } from "@/lib/format";
+import { formatTokens, localShortDate } from "@/lib/format";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Color palette for model breakdown bars
 // ---------------------------------------------------------------------------
 
-function fmtCost(n: number): string {
-  if (n === 0) return "$0";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(2)}`;
-}
+const MODEL_COLORS = [
+  "#f97316", // orange
+  "#3b82f6", // blue
+  "#22c55e", // green
+  "#a855f7", // purple
+  "#ec4899", // pink
+  "#eab308", // yellow
+  "#06b6d4", // cyan
+  "#ef4444", // red
+];
 
-function shortDate(d: string): string {
-  // "2026-03-12" → "03/12"
-  const parts = d.split("-");
-  return parts.length === 3 ? `${parts[1]}/${parts[2]}` : d;
-}
+// ---------------------------------------------------------------------------
+// Recharts AreaChart config
+// ---------------------------------------------------------------------------
 
-/** Shorten UUID-like keys: "d12cd4d5-65c1-434d-9f23-..." → "d12cd4d5…" */
-function shortKey(key: string): string {
-  // UUID pattern
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(key)) {
-    return key.slice(0, 8) + "…";
+const chartConfig = {
+  input_tokens: {
+    label: "Input",
+    color: "#f97316",
+  },
+  output_tokens: {
+    label: "Output",
+    color: "#3b82f6",
+  },
+} satisfies ChartConfig;
+
+// ---------------------------------------------------------------------------
+// Model Breakdown bar chart
+// ---------------------------------------------------------------------------
+
+function ModelBreakdown({ models }: { models: GroupedUsage[] }) {
+  if (models.length === 0) {
+    return <p className="text-sm text-muted-foreground text-center py-4">暂无模型数据</p>;
   }
-  if (key.length > 16) return key.slice(0, 16) + "…";
-  return key;
-}
 
-// ---------------------------------------------------------------------------
-// Bar chart (pure CSS, no deps)
-// ---------------------------------------------------------------------------
+  const total = models.reduce((s, m) => s + m.total_tokens, 0) || 1;
+  const sorted = [...models].sort((a, b) => b.total_tokens - a.total_tokens);
 
-function MiniBar({ items, maxVal }: { items: { label: string; value: number; color: string }[]; maxVal: number }) {
   return (
-    <div className="space-y-1.5">
-      {items.map((item) => (
-        <div key={item.label} className="flex items-center gap-2 text-xs">
-          <span className="w-28 truncate text-muted-foreground text-right shrink-0">{item.label}</span>
-          <div className="flex-1 h-4 bg-muted/40 rounded overflow-hidden">
-            <div
-              className="h-full rounded transition-all"
-              style={{
-                width: maxVal > 0 ? `${Math.max((item.value / maxVal) * 100, 1)}%` : "0%",
-                backgroundColor: item.color,
-              }}
-            />
+    <div className="flex flex-wrap gap-x-6 gap-y-3">
+      {sorted.map((m, i) => {
+        const pct = Math.round((m.total_tokens / total) * 100);
+        const color = MODEL_COLORS[i % MODEL_COLORS.length];
+        return (
+          <div key={m.key} className="min-w-[140px] flex-1 space-y-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-foreground truncate max-w-[140px]" title={m.key}>
+                {m.key}
+              </span>
+              <span className="font-semibold ml-2 shrink-0" style={{ color }}>
+                {pct}%
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-muted/40 overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${pct}%`, backgroundColor: color }}
+              />
+            </div>
+            <p className="text-[10px] text-muted-foreground">{formatTokens(m.total_tokens)} tokens</p>
           </div>
-          <span className="w-14 text-right font-mono text-foreground shrink-0">{formatTokens(item.value)}</span>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
+// DailyTable removed — bottom section shows per-request records
+
 // ---------------------------------------------------------------------------
-// Daily table
+// Per-request records table
 // ---------------------------------------------------------------------------
 
-function DailyTable({ daily }: { daily: DailyUsage[] }) {
-  if (daily.length === 0) {
-    return <p className="text-sm text-muted-foreground text-center py-4">暂无数据</p>;
+const PAGE_SIZE = 50;
+
+function RecordsTable({ records }: { records: UsageRecord[] }) {
+  const [page, setPage] = useState(0);
+
+  if (records.length === 0) {
+    return <p className="text-center text-sm text-muted-foreground py-8">暂无请求数据</p>;
   }
-  return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-[10px] text-muted-foreground border-b border-border/30">
-          <th className="text-left font-normal py-1.5 pl-2">日期</th>
-          <th className="text-right font-normal py-1.5 pr-1">Input</th>
-          <th className="text-right font-normal py-1.5 pr-1">Output</th>
-          <th className="text-right font-normal py-1.5 pr-1">Total</th>
-          <th className="text-right font-normal py-1.5 pr-1">Cache R</th>
-          <th className="text-right font-normal py-1.5 pr-2">请求</th>
-        </tr>
-      </thead>
-      <tbody>
-        {daily.slice(0, 14).map((d) => (
-          <tr key={d.date} className="hover:bg-muted/30 transition-colors">
-            <td className="py-1.5 pl-2 font-mono text-muted-foreground">{shortDate(d.date)}</td>
-            <td className="py-1.5 pr-1 text-right font-mono">
-              <span className="inline-flex items-center gap-0.5 text-primary">
-                <ArrowUpRight className="w-3 h-3 shrink-0" />
-                {formatTokens(d.input_tokens)}
-              </span>
-            </td>
-            <td className="py-1.5 pr-1 text-right font-mono">
-              <span className="inline-flex items-center gap-0.5 text-secondary">
-                <ArrowDownRight className="w-3 h-3 shrink-0" />
-                {formatTokens(d.output_tokens)}
-              </span>
-            </td>
-            <td className="py-1.5 pr-1 text-right font-mono text-foreground font-medium">
-              {formatTokens(d.total_tokens)}
-            </td>
-            <td className="py-1.5 pr-1 text-right font-mono text-muted-foreground">
-              {formatTokens(d.cache_read)}
-            </td>
-            <td className="py-1.5 pr-2 text-right font-mono text-muted-foreground">
-              {d.requests}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
 
-// ---------------------------------------------------------------------------
-// Grouped breakdown
-// ---------------------------------------------------------------------------
+  const totalPages = Math.ceil(records.length / PAGE_SIZE);
+  const slice = records.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-const COLORS = [
-  "oklch(0.72 0.13 50)",   // primary orange
-  "oklch(0.59 0.04 196)",  // teal
-  "oklch(0.65 0.15 280)",  // purple
-  "oklch(0.75 0.12 140)",  // green
-  "oklch(0.68 0.10 30)",   // warm
-  "oklch(0.60 0.08 220)",  // blue
-];
-
-function GroupedBreakdown({ items, label }: { items: GroupedUsage[]; label: string }) {
-  if (items.length === 0) {
-    return <p className="text-sm text-muted-foreground text-center py-4">暂无 {label} 数据</p>;
-  }
-  const maxVal = Math.max(...items.map((i) => i.total_tokens), 1);
-  const barItems = items.map((item, idx) => ({
-    label: shortKey(item.key),
-    value: item.total_tokens,
-    color: COLORS[idx % COLORS.length],
-  }));
+  const fmtTime = (ts: string) => {
+    // epoch ms (pure digits) → Date; otherwise ISO string
+    const d = /^\d+$/.test(ts) ? new Date(Number(ts)) : new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    return d.toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  };
 
   return (
-    <div className="space-y-4">
-      <MiniBar items={barItems} maxVal={maxVal} />
-      <table className="w-full text-xs table-fixed">
-        <thead>
-          <tr className="text-[10px] text-muted-foreground border-b border-border/30">
-            <th className="text-left font-normal py-1.5 pl-2 w-[35%]">{label}</th>
-            <th className="text-right font-normal py-1.5 w-[16%]">Input</th>
-            <th className="text-right font-normal py-1.5 w-[16%]">Output</th>
-            <th className="text-right font-normal py-1.5 w-[16%]">Total</th>
-            <th className="text-right font-normal py-1.5 pr-2 w-[12%]">请求</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.key} className="hover:bg-muted/30 transition-colors">
-              <td className="py-1.5 pl-2 text-muted-foreground truncate overflow-hidden" title={item.key}>{shortKey(item.key)}</td>
-              <td className="py-1.5 text-right font-mono text-primary">{formatTokens(item.input_tokens)}</td>
-              <td className="py-1.5 text-right font-mono text-secondary">{formatTokens(item.output_tokens)}</td>
-              <td className="py-1.5 text-right font-mono text-foreground font-medium">{formatTokens(item.total_tokens)}</td>
-              <td className="py-1.5 pr-2 text-right font-mono text-muted-foreground">{item.requests}</td>
+    <div className="min-w-0">
+      <div className="overflow-auto max-h-[320px]">
+        <table className="w-full table-fixed text-xs">
+          <thead className="sticky top-0 bg-card z-10">
+            <tr className="border-b border-border/30 text-muted-foreground">
+              <th className="text-left py-2 px-2  w-[15%]">时间</th>
+              <th className="text-left py-2 px-2  w-[14%]">会话</th>
+              <th className="text-left py-2 px-2  w-[20%]">模型</th>
+              <th className="text-left py-2 px-2  w-[12%]">Provider</th>
+              <th className="text-right py-2 px-2  w-[10%]">Input</th>
+              <th className="text-right py-2 px-2  w-[10%]">Output</th>
+              <th className="text-right py-2 px-2  w-[9%]">Cache</th>
+              <th className="text-right py-2 px-2  w-[10%]">合计</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {slice.map((r, i) => (
+              <tr key={`${r.session_id}-${i}`} className="border-b border-border/10 hover:bg-secondary/20 transition-colors">
+                <td className="py-2 px-2 text-muted-foreground truncate" title={fmtTime(r.timestamp)}>{fmtTime(r.timestamp)}</td>
+                <td className="py-2 px-2 font-mono truncate" title={r.session_id}>
+                  {r.session_id.length > 12 ? r.session_id.slice(0, 12) + "…" : r.session_id}
+                </td>
+                <td className="py-2 px-2 truncate" title={r.model}>{r.model}</td>
+                <td className="py-2 px-2 truncate" title={r.provider}>{r.provider}</td>
+                <td className="py-2 px-2 text-right" style={{ color: "#f97316" }}>{formatTokens(r.input_tokens)}</td>
+                <td className="py-2 px-2 text-right" style={{ color: "#3b82f6" }}>{formatTokens(r.output_tokens)}</td>
+                <td className="py-2 px-2 text-right text-muted-foreground">{formatTokens(r.cache_read + r.cache_write)}</td>
+                <td className="py-2 px-2 text-right ">{formatTokens(r.input_tokens + r.output_tokens)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-3 px-1">
+          <span className="text-xs text-muted-foreground">
+            共 {records.length} 条 · 第 {page + 1}/{totalPages} 页
+          </span>
+          <div className="flex gap-1">
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</Button>
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>下一页</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -197,141 +194,276 @@ interface UsageDialogProps {
 export function UsageDialog({ open, onOpenChange }: UsageDialogProps) {
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(1);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (d: number) => {
     setLoading(true);
-    setError(null);
     try {
-      const data = await fetchUsageStats(days);
-      setStats(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const usage = await fetchUsageStats(d);
+      setStats(usage);
+    } catch {
+      // ignore
     } finally {
       setLoading(false);
     }
-  }, [days]);
+  }, []);
 
   useEffect(() => {
-    if (open) load();
-  }, [open, load]);
+    if (open) load(days);
+  }, [open, days, load]);
 
-  const t = stats?.totals;
+  const dayOptions = [
+    { label: "24h", value: 1 },
+    { label: "3d", value: 3 },
+    { label: "7d", value: 7 },
+    { label: "30d", value: 30 },
+    { label: "全部", value: 365 },
+  ];
+
+  const totals = stats?.totals;
+  const modelCount = stats?.by_model?.length ?? 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl w-[90vw] max-h-[85vh] overflow-hidden flex flex-col">
-        <DialogHeader>
-          <div className="flex items-center justify-between">
-            <DialogTitle className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" />
-              Token 用量统计
-            </DialogTitle>
+      <DialogContent className="min-w-2xl max-w-4xl max-h-[85vh] overflow-y-auto overflow-x-hidden p-0">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-6 pb-2">
+          <div>
+            <h2 className="text-lg font-bold text-foreground">Token 用量总览</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">按日期和会话查看 Token 使用详情</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Day range pills */}
+            <div className="flex items-center bg-muted/30 rounded-lg p-0.5">
+              {dayOptions.map((opt) => (
+                <button
+                  key={opt.value}
+                  className={cn(
+                    "px-3 py-1 text-xs rounded-md transition-colors",
+                    days === opt.value
+                      ? "bg-primary text-primary-foreground "
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setDays(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground -mr-2 -mt-1"
-              onClick={() => onOpenChange(false)}
+              className="h-7 w-7"
+              onClick={() => load(days)}
+              disabled={loading}
             >
-              <X className="w-4 h-4" />
+              <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
             </Button>
           </div>
-          <DialogDescription>
-            扫描 OpenClaw 会话日志，按天/Agent/Provider/Model 聚合
-          </DialogDescription>
-        </DialogHeader>
-
-        {/* Period selector + refresh */}
-        <div className="flex items-center gap-2 pb-2">
-          {[7, 14, 30, 90].map((d) => (
-            <Button
-              key={d}
-              variant={days === d ? "default" : "outline"}
-              size="sm"
-              className="h-6 px-2 text-xs"
-              onClick={() => setDays(d)}
-            >
-              {d}天
-            </Button>
-          ))}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 ml-auto text-muted-foreground"
-            onClick={load}
-            disabled={loading}
-          >
-            <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
-          </Button>
         </div>
 
-        {error && (
-          <div className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{error}</div>
-        )}
+        <div className="px-6 pb-6 space-y-4">
+          {/* Row 1: Stat cards */}
+          <div className="grid grid-cols-3 gap-3">
+            {/* Tokens */}
+            <Card className="p-4 bg-card/50 border-border/30">
+              <div className="flex items-center gap-2 text-muted-foreground mb-2">
+                <Zap className="w-4 h-4 text-orange-500" />
+                <span className="text-xs uppercase tracking-wide ">Tokens</span>
+              </div>
+              <p className="text-2xl font-bold text-foreground">
+                {formatTokens(totals?.total_tokens ?? 0)}
+              </p>
+              <div className="flex items-center gap-3 mt-1.5 text-xs">
+                <span className="flex items-center gap-0.5" style={{ color: "#f97316" }}>
+                  <ArrowUpRight className="w-3 h-3" />
+                  {formatTokens(totals?.input_tokens ?? 0)} in
+                </span>
+                <span className="flex items-center gap-0.5" style={{ color: "#3b82f6" }}>
+                  <ArrowDownRight className="w-3 h-3" />
+                  {formatTokens(totals?.output_tokens ?? 0)} out
+                </span>
+              </div>
+            </Card>
 
-        {loading && !stats && (
-          <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-            扫描中…
+            {/* Requests */}
+            <Card className="p-4 bg-card/50 border-border/30">
+              <div className="flex items-center gap-2 text-muted-foreground mb-2">
+                <Hash className="w-4 h-4 text-green-500" />
+                <span className="text-xs uppercase tracking-wide ">请求数</span>
+              </div>
+              <p className="text-2xl font-bold text-foreground">
+                {totals?.requests ?? 0}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                {totals?.sessions_scanned ?? 0} 个会话 · {totals?.days ?? 0} 天
+              </p>
+            </Card>
+
+            {/* Models */}
+            <Card className="p-4 bg-card/50 border-border/30">
+              <div className="flex items-center gap-2 text-muted-foreground mb-2">
+                <Layers className="w-4 h-4 text-purple-500" />
+                <span className="text-xs uppercase tracking-wide ">模型</span>
+              </div>
+              <p className="text-2xl font-bold text-foreground">
+                {modelCount}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                {stats?.by_provider?.length ?? 0} 个 Provider
+              </p>
+            </Card>
           </div>
-        )}
 
-        {stats && (
-          <div className="flex-1 overflow-y-auto space-y-4 pr-1 custom-scrollbar">
-            {/* Summary cards */}
-            <div className="grid grid-cols-3 gap-3">
-              <Card className="p-3 bg-card/50 border-border/30">
-                <p className="text-[10px] text-muted-foreground mb-1">总 Token</p>
-                <p className="text-lg font-bold text-foreground">{formatTokens(t?.total_tokens ?? 0)}</p>
-                <div className="flex gap-2 text-[10px] mt-0.5">
-                  <span className="text-primary flex items-center"><ArrowUpRight className="w-2.5 h-2.5" />{formatTokens(t?.input_tokens ?? 0)}</span>
-                  <span className="text-secondary flex items-center"><ArrowDownRight className="w-2.5 h-2.5" />{formatTokens(t?.output_tokens ?? 0)}</span>
-                </div>
-              </Card>
-              <Card className="p-3 bg-card/50 border-border/30">
-                <p className="text-[10px] text-muted-foreground mb-1">请求数</p>
-                <p className="text-lg font-bold text-foreground">{t?.requests ?? 0}</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">{t?.sessions_scanned ?? 0} 会话</p>
-              </Card>
-              <Card className="p-3 bg-card/50 border-border/30">
-                <p className="text-[10px] text-muted-foreground mb-1">费用</p>
-                <p className="text-lg font-bold text-foreground">{fmtCost(t?.cost ?? 0)}</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">{t?.days ?? 0} 天</p>
-              </Card>
+          {/* Row 2: Token trend chart (full width, recharts) */}
+          <Card className="p-4 bg-card/50 border-border/30">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold text-foreground">Token 趋势</span>
             </div>
+            {loading ? (
+              <div className="flex items-center justify-center h-[220px] text-sm text-muted-foreground">加载中…</div>
+            ) : days === 1 ? (
+              // Hourly chart for 24h view
+              (stats?.hourly?.length ?? 0) === 0 ? (
+                <div className="flex items-center justify-center h-[220px] text-sm text-muted-foreground">暂无数据</div>
+              ) : (
+                <ChartContainer config={chartConfig} className="aspect-auto h-[220px] w-full">
+                  <AreaChart data={stats?.hourly ?? []}>
+                    <defs>
+                      <linearGradient id="fillInput" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--color-input_tokens)" stopOpacity={0.8} />
+                        <stop offset="95%" stopColor="var(--color-input_tokens)" stopOpacity={0.1} />
+                      </linearGradient>
+                      <linearGradient id="fillOutput" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--color-output_tokens)" stopOpacity={0.8} />
+                        <stop offset="95%" stopColor="var(--color-output_tokens)" stopOpacity={0.1} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} />
+                    <XAxis
+                      dataKey="hour"
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={8}
+                      ticks={Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`)}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={4}
+                      width={45}
+                      tickFormatter={(v: number) => formatTokens(v)}
+                    />
+                    <ChartTooltip
+                      cursor={false}
+                      content={
+                        <ChartTooltipContent
+                          labelFormatter={(value) => `${value}`}
+                          indicator="dot"
+                        />
+                      }
+                    />
+                    <Area
+                      dataKey="input_tokens"
+                      type="monotone"
+                      fill="url(#fillInput)"
+                      stroke="var(--color-input_tokens)"
+                    />
+                    <Area
+                      dataKey="output_tokens"
+                      type="monotone"
+                      fill="url(#fillOutput)"
+                      stroke="var(--color-output_tokens)"
+                    />
+                    <ChartLegend content={<ChartLegendContent />} />
+                  </AreaChart>
+                </ChartContainer>
+              )
+            ) : (stats?.daily?.length ?? 0) === 0 ? (
+              <div className="flex items-center justify-center h-[220px] text-sm text-muted-foreground">暂无数据</div>
+            ) : (
+              <ChartContainer config={chartConfig} className="aspect-auto h-[220px] w-full">
+                <AreaChart data={[...(stats?.daily ?? [])].sort((a, b) => a.date.localeCompare(b.date))}>
+                  <defs>
+                    <linearGradient id="fillInput" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--color-input_tokens)" stopOpacity={0.8} />
+                      <stop offset="95%" stopColor="var(--color-input_tokens)" stopOpacity={0.1} />
+                    </linearGradient>
+                    <linearGradient id="fillOutput" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--color-output_tokens)" stopOpacity={0.8} />
+                      <stop offset="95%" stopColor="var(--color-output_tokens)" stopOpacity={0.1} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={8}
+                    minTickGap={32}
+                    tickFormatter={(value) => localShortDate(value)}
+                  />
+                  <YAxis
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={4}
+                    width={45}
+                    tickFormatter={(v: number) => formatTokens(v)}
+                  />
+                  <ChartTooltip
+                    cursor={false}
+                    content={
+                      <ChartTooltipContent
+                        labelFormatter={(value) => localShortDate(value)}
+                        indicator="dot"
+                      />
+                    }
+                  />
+                  <Area
+                    dataKey="input_tokens"
+                    type="monotone"
+                    fill="url(#fillInput)"
+                    stroke="var(--color-input_tokens)"
+                  />
+                  <Area
+                    dataKey="output_tokens"
+                    type="monotone"
+                    fill="url(#fillOutput)"
+                    stroke="var(--color-output_tokens)"
+                  />
+                  <ChartLegend content={<ChartLegendContent />} />
+                </AreaChart>
+              </ChartContainer>
+            )}
+          </Card>
 
-            {/* Tabs */}
-            <Tabs defaultValue="daily" className="flex flex-col flex-1">
-              <TabsList variant="line" className="w-full mb-3">
-                <TabsTrigger value="daily" className="gap-1 text-xs">
-                  <BarChart3 className="w-3 h-3" />每日
-                </TabsTrigger>
-                <TabsTrigger value="agent" className="gap-1 text-xs">
-                  <Users className="w-3 h-3" />Agent
-                </TabsTrigger>
-                <TabsTrigger value="provider" className="gap-1 text-xs">
-                  <Cpu className="w-3 h-3" />Provider
-                </TabsTrigger>
-                <TabsTrigger value="model" className="gap-1 text-xs">
-                  <Layers className="w-3 h-3" />Model
-                </TabsTrigger>
-              </TabsList>
+          {/* Row 3: Model Breakdown (responsive wrap) */}
+          <Card className="p-4 bg-card/50 border-border/30">
+            <span className="text-sm font-semibold text-foreground">模型分布</span>
+            <div className="mt-3">
+              {loading ? (
+                <p className="text-sm text-muted-foreground text-center py-4">加载中…</p>
+              ) : (
+                <ModelBreakdown models={stats?.by_model ?? []} />
+              )}
+            </div>
+          </Card>
 
-              <TabsContent value="daily">
-                <DailyTable daily={stats.daily} />
-              </TabsContent>
-              <TabsContent value="agent">
-                <GroupedBreakdown items={stats.by_agent} label="Agent" />
-              </TabsContent>
-              <TabsContent value="provider">
-                <GroupedBreakdown items={stats.by_provider} label="Provider" />
-              </TabsContent>
-              <TabsContent value="model">
-                <GroupedBreakdown items={stats.by_model} label="Model" />
-              </TabsContent>
-            </Tabs>
-          </div>
-        )}
+          {/* Row 4: Per-request records table */}
+          <Card className="bg-card/50 border-border/30 overflow-hidden">
+            <div className="flex items-center justify-between px-4 pt-3 pb-2">
+              <span className="text-sm font-semibold text-foreground">请求明细</span>
+              <span className="text-xs text-muted-foreground">{stats?.records?.length ?? 0} 条记录</span>
+            </div>
+            <div className="px-4 pb-4">
+              {loading ? (
+                <p className="text-center text-sm text-muted-foreground py-8">加载中…</p>
+              ) : (
+                <RecordsTable records={stats?.records ?? []} />
+              )}
+            </div>
+          </Card>
+        </div>
       </DialogContent>
     </Dialog>
   );

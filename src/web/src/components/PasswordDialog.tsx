@@ -63,7 +63,7 @@ export function PasswordDialog({
                 <p className="text-sm text-destructive">{passwordError}</p>
               )}
             </div>
-            <DialogFooter>
+            <DialogFooter className="bg-transparent border-t-0">
               <Button type="submit" disabled={validating}>
                 {validating ? "验证中…" : "确认"}
               </Button>

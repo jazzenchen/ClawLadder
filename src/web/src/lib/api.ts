@@ -160,6 +160,11 @@ export async function deleteSession(sessionId: string): Promise<void> {
 export interface DeviceInfo {
   serial: string;
   hardwareUUID: string;
+  model?: string;
+  chip?: string;
+  memory?: string;
+  osVersion?: string;
+  disk?: string;
 }
 
 export async function fetchDeviceSerial(): Promise<DeviceInfo> {
@@ -228,6 +233,127 @@ export interface ProvidersResponse {
 
 export async function fetchProviders(): Promise<ProvidersResponse> {
   return apiFetch("/api/models/providers");
+}
+
+// ---------------------------------------------------------------------------
+// User-configured model providers (from config)
+// ---------------------------------------------------------------------------
+
+export interface UserProviderModel {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+export interface UserProvider {
+  key: string;           // provider key in config, e.g. "anthropic", "custom-my-host"
+  apiKey?: string;       // masked or present
+  baseUrl?: string;
+  api?: string;          // protocol
+  models?: UserProviderModel[];
+}
+
+export interface UserModelsInfo {
+  providers: UserProvider[];
+  defaultPrimary: string; // e.g. "anthropic/claude-sonnet-4-20250514"
+  envKeys: string[];      // env keys that have values (for builtin providers)
+}
+
+/** Parse the raw config to extract user-configured model providers */
+export async function fetchUserModels(): Promise<UserModelsInfo> {
+  const config = (await fetchConfig()) as Record<string, unknown> | null;
+  if (!config) return { providers: [], defaultPrimary: "", envKeys: [] };
+
+  const modelsSection = (config.models as Record<string, unknown>) ?? {};
+  const providersObj = (modelsSection.providers as Record<string, unknown>) ?? {};
+  const envObj = (config.env as Record<string, string>) ?? {};
+  const agents = (config.agents as Record<string, unknown>) ?? {};
+  const defaults = (agents.defaults as Record<string, unknown>) ?? {};
+  const modelDefaults = (defaults.model as Record<string, unknown>) ?? {};
+  const defaultPrimary = (modelDefaults.primary as string) ?? "";
+
+  const providers: UserProvider[] = [];
+
+  // Collect env keys that have values (for detecting builtin providers)
+  const envKeys = Object.keys(envObj).filter((k) => !!envObj[k]);
+
+  // Parse explicit provider entries
+  for (const [key, val] of Object.entries(providersObj)) {
+    if (!val || typeof val !== "object") {
+      // Empty entry = builtin provider with env key only
+      providers.push({ key });
+      continue;
+    }
+    const entry = val as Record<string, unknown>;
+    providers.push({
+      key,
+      apiKey: entry.apiKey ? "••••••" : undefined,
+      baseUrl: entry.baseUrl as string | undefined,
+      api: entry.api as string | undefined,
+      models: Array.isArray(entry.models)
+        ? (entry.models as UserProviderModel[])
+        : undefined,
+    });
+  }
+
+  return { providers, defaultPrimary, envKeys };
+}
+
+/** Set the default primary model via config set */
+export async function setDefaultModel(modelPath: string): Promise<{ ok: boolean }> {
+  return configSet("agents.defaults.model.primary", modelPath);
+}
+
+/** Remove a provider from the config */
+export async function removeProvider(providerKey: string): Promise<void> {
+  const config = (await fetchConfig()) as Record<string, unknown> | null;
+  if (!config) return;
+  const modelsSection = (config.models as Record<string, unknown>) ?? {};
+  const providersObj = { ...(modelsSection.providers as Record<string, unknown>) ?? {} };
+  delete providersObj[providerKey];
+  config.models = { ...modelsSection, mode: "merge", providers: providersObj };
+
+  // Clear default model if it belongs to the removed provider
+  const agents = (config.agents as Record<string, unknown>) ?? {};
+  const defaults = (agents.defaults as Record<string, unknown>) ?? {};
+  const modelDefaults = (defaults.model as Record<string, unknown>) ?? {};
+  const primary = (modelDefaults.primary as string) ?? "";
+  if (primary.startsWith(providerKey + "/") || primary === providerKey) {
+    config.agents = {
+      ...agents,
+      defaults: { ...defaults, model: { ...modelDefaults, primary: "" } },
+    };
+  }
+
+  await saveConfig(config);
+}
+
+/** Add or update a provider in the config (reuses StepLaunch logic) */
+export async function upsertProvider(
+  providerKey: string,
+  entry: {
+    apiKey?: string;
+    baseUrl?: string;
+    api?: string;
+    models?: UserProviderModel[];
+  },
+  envKey?: string,
+  envValue?: string,
+): Promise<void> {
+  const config = (await fetchConfig()) as Record<string, unknown> | null;
+  if (!config) throw new Error("Config not found");
+  const modelsSection = (config.models as Record<string, unknown>) ?? {};
+  const providersObj = { ...(modelsSection.providers as Record<string, unknown>) ?? {} };
+  providersObj[providerKey] = entry;
+  config.models = { ...modelsSection, mode: "merge", providers: providersObj };
+  if (envKey && envValue) {
+    const envObj = { ...(config.env as Record<string, string>) ?? {} };
+    envObj[envKey] = envValue;
+    config.env = envObj;
+  }
+  await saveConfig(config);
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +514,7 @@ export interface OpenClawStatus {
     url: string;
     reachable: boolean;
     connectLatencyMs: number;
+    error?: string;
     self?: { host: string; version: string; platform: string };
   };
   gatewayService: {
@@ -448,11 +575,33 @@ export interface UsageTotals {
   days: number;
 }
 
+export interface UsageRecord {
+  timestamp: string;
+  agent_id: string;
+  session_id: string;
+  model: string;
+  provider: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+export interface HourlyUsage {
+  hour: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  requests: number;
+}
+
 export interface UsageStats {
   daily: DailyUsage[];
+  hourly: HourlyUsage[];
   by_agent: GroupedUsage[];
   by_provider: GroupedUsage[];
   by_model: GroupedUsage[];
+  records: UsageRecord[];
   totals: UsageTotals;
 }
 
@@ -466,5 +615,85 @@ export async function fetchUsageStats(days: number = 30): Promise<UsageStats> {
 
 export async function pluginsEnable(name: string): Promise<{ ok: boolean; output: string }> {
   return apiPost("/api/plugins/enable", { name });
+}
+
+export async function pluginsDisable(name: string): Promise<{ ok: boolean; output: string }> {
+  return apiPost("/api/plugins/disable", { name });
+}
+
+export async function fetchPluginsList(): Promise<unknown> {
+  return apiFetch("/api/plugins/list");
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+export async function fetchHealth(): Promise<unknown> {
+  return apiFetch("/api/health");
+}
+
+// ---------------------------------------------------------------------------
+// Device Pairing
+// ---------------------------------------------------------------------------
+
+export async function devicesAutoApprove(): Promise<{ approved: number; rpcOk: boolean }> {
+  return apiPost("/api/devices/auto-approve");
+}
+
+// ---------------------------------------------------------------------------
+// Channels Status
+// ---------------------------------------------------------------------------
+
+export async function fetchChannelsStatus(): Promise<unknown> {
+  return apiFetch("/api/channels/status");
+}
+
+// ---------------------------------------------------------------------------
+// Pairing
+// ---------------------------------------------------------------------------
+
+export interface PairingRequest {
+  code: string;
+  channel: string;
+  senderId: string;
+  senderName?: string;
+  requestedAt: number;
+}
+
+export async function fetchPairingList(): Promise<{ requests: PairingRequest[] }> {
+  return apiFetch("/api/pairing/list");
+}
+
+export async function approvePairing(code: string, channel?: string): Promise<{ ok: boolean; output: string }> {
+  return apiPost("/api/pairing/approve", { code, channel });
+}
+
+// ---------------------------------------------------------------------------
+// Agents Management
+// ---------------------------------------------------------------------------
+
+export async function fetchAgentsList(): Promise<unknown> {
+  return apiFetch("/api/agents/list");
+}
+
+export async function addAgent(id: string, workspace?: string): Promise<{ ok: boolean; output: string }> {
+  return apiPost("/api/agents/add", { id, workspace });
+}
+
+export async function deleteAgent(id: string): Promise<{ ok: boolean; output: string }> {
+  return apiPost("/api/agents/delete", { id });
+}
+
+export async function setAgentIdentity(id: string, name?: string, emoji?: string): Promise<{ ok: boolean; output: string }> {
+  return apiPost("/api/agents/set-identity", { id, name, emoji });
+}
+
+// ---------------------------------------------------------------------------
+// Memory Status
+// ---------------------------------------------------------------------------
+
+export async function fetchMemoryStatus(): Promise<unknown> {
+  return apiFetch("/api/memory/status");
 }
 

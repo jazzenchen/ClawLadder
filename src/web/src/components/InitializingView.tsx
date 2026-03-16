@@ -109,7 +109,7 @@ export function InitializingView({ onComplete }: InitializingViewProps) {
       </div>
 
       {/* Title */}
-      <h1 className="text-xl font-medium text-foreground mb-2">
+      <h1 className="text-xl  text-foreground mb-2">
         {allCompleted ? "初始化完成" : "正在初始化"}
       </h1>
       <p className="text-sm text-muted-foreground mb-10">

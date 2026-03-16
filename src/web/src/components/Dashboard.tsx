@@ -8,8 +8,7 @@ import {
   Square,
   Zap,
   MessageSquare,
-  Bot,
-  Clock,
+  Cpu,
   Radio,
   Shield,
   Database,
@@ -23,6 +22,9 @@ import {
   CheckCircle2,
   Info,
   PieChart,
+  Activity,
+  Puzzle,
+  Monitor,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -44,6 +46,10 @@ import {
   fetchGatewayStatus,
   fetchGatewayUrl,
   fetchOpenClawStatus,
+  fetchUsageStats,
+  fetchSkills,
+  fetchHooks,
+  fetchUserModels,
   gatewayInstall,
   gatewayStart,
   gatewayRestart,
@@ -55,8 +61,18 @@ import {
   type GatewayUrl,
   type OpenClawStatus,
   type DeviceInfo,
+  type UsageStats,
+  type UserModelsInfo,
 } from "@/lib/api";
 import { UsageDialog } from "@/components/UsageDialog";
+import { SessionsDialog } from "@/components/SessionsDialog";
+import { AuditDialog, type AuditFinding } from "@/components/AuditDialog";
+import { HealthDialog } from "@/components/HealthDialog";
+import { ModelsDialog } from "@/components/ModelsDialog";
+import { ChannelsDialog } from "@/components/ChannelsDialog";
+import { ExtensionsDialog } from "@/components/ExtensionsDialog";
+import { MemoryDialog } from "@/components/MemoryDialog";
+import { DeviceDialog } from "@/components/DeviceDialog";
 
 interface DashboardProps {
   installed: boolean;
@@ -83,18 +99,7 @@ async function openExternal(url: string) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-import { formatTokens } from "../lib/format";
-
-function formatAge(ms: number | null): string {
-  if (ms == null) return "—";
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h`;
-  return `${Math.floor(hr / 24)}d`;
-}
+import { formatTokens, formatAge } from "../lib/format";
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -116,7 +121,7 @@ function StatCard({
   value: string;
   valueLabel?: string;
   subtext?: React.ReactNode;
-  accent?: "primary" | "success" | "destructive";
+  accent?: "primary" | "success" | "destructive" | "warning";
   className?: string;
   detail?: React.ReactNode;
   onClick?: () => void;
@@ -125,6 +130,7 @@ function StatCard({
     primary: "text-primary",
     success: "text-success",
     destructive: "text-destructive",
+    warning: "text-yellow-500",
   };
 
   return (
@@ -177,65 +183,8 @@ function StatCard({
   );
 }
 
-function InfoRow({
-  label,
-  value,
-  status,
-  mono,
-}: {
-  label: string;
-  value: string;
-  status?: "success" | "error" | "inactive";
-  mono?: boolean;
-}) {
-  const statusTextColor =
-    status === "success"
-      ? "text-green-500"
-      : status === "error"
-        ? "text-destructive"
-        : "";
 
-  return (
-    <div className="flex items-center justify-between text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <div className="flex items-center gap-1.5">
-        {status &&
-          (status === "success" ? (
-            <span className="w-1.5 h-1.5 rounded-full bg-success" />
-          ) : status === "error" ? (
-            <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
-          ) : (
-            <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30" />
-          ))}
-        <span className={cn(
-          status ? statusTextColor : "text-foreground",
-          mono && "font-mono text-xs"
-        )}>
-          {value}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function DetailRow({
-  label,
-  value,
-  className: valueClassName,
-}: {
-  label: string;
-  value: string;
-  className?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-muted-foreground shrink-0">{label}</span>
-      <span className={cn("text-foreground font-mono truncate text-right", valueClassName)}>
-        {value}
-      </span>
-    </div>
-  );
-}
+// (InfoRow and DetailRow removed — details now shown in dedicated Dialogs)
 
 function ActionButton({
   icon,
@@ -282,11 +231,20 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tokenCopied, setTokenCopied] = useState(false);
-  const tokenCopiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [openingDashboard, setOpeningDashboard] = useState(false);
   const [doctorOutput, setDoctorOutput] = useState<string | null>(null);
   const [usageDialogOpen, setUsageDialogOpen] = useState(false);
+  const [sessionsDialogOpen, setSessionsDialogOpen] = useState(false);
+  const [auditDialogOpen, setAuditDialogOpen] = useState(false);
+  const [healthDialogOpen, setHealthDialogOpen] = useState(false);
+  const [modelsDialogOpen, setModelsDialogOpen] = useState(false);
+  const [channelsDialogOpen, setChannelsDialogOpen] = useState(false);
+  const [extensionsDialogOpen, setExtensionsDialogOpen] = useState(false);
+  const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
+  const [deviceDialogOpen, setDeviceDialogOpen] = useState(false);
+  const [usageTotals, setUsageTotals] = useState<UsageStats["totals"] | null>(null);
+  const [extensionCounts, setExtensionCounts] = useState<{ skills: number; hooks: number }>({ skills: 0, hooks: 0 });
+  const [userModels, setUserModels] = useState<UserModelsInfo | null>(null);
 
   const [pendingAction, setPendingAction] = useState<{
     key: string;
@@ -309,8 +267,23 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
       setGwStatus(gw);
       setGwUrl(url);
       setOcStatus(oc);
+      // Fetch usage totals (non-blocking)
+      fetchUsageStats(30).then((u) => setUsageTotals(u.totals)).catch(() => {});
+      // Fetch user-configured models (non-blocking)
+      fetchUserModels().then((m) => {
+        setUserModels(m);
+        // Auto-open models dialog if no providers configured at all
+        const hasProviders = (m.providers.length > 0) || (m.envKeys.length > 0);
+        if (!hasProviders) setModelsDialogOpen(true);
+      }).catch(() => {});
+      // Fetch extension counts (non-blocking)
+      Promise.all([
+        fetchSkills().then((r) => r.skills?.length ?? 0).catch(() => 0),
+        fetchHooks().then((r) => r.hooks?.length ?? 0).catch(() => 0),
+      ]).then(([s, h]) => setExtensionCounts({ skills: s, hooks: h }));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      console.error("[Dashboard] refresh failed:", e);
+      setError("加载状态失败，请检查服务是否正常运行");
     } finally {
       setLoading(false);
     }
@@ -325,7 +298,6 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
     }, isRunning ? 15_000 : 5_000);
     return () => {
       clearInterval(interval);
-      clearTimeout(tokenCopiedTimerRef.current);
     };
   }, [refresh, isRunning]);
 
@@ -372,11 +344,11 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
                   />
                   <span
                     className={cn(
-                      "text-xs font-medium",
+                      "text-xs ",
                       isRunning ? "text-green-500" : "text-destructive"
                     )}
                   >
-                    {isRunning ? "Running" : "Stopped"}
+                    {isRunning ? "运行中" : "已停止"}
                   </span>
                 </div>
               </div>
@@ -426,46 +398,125 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
           </div>
         )}
 
-        {/* Stats Grid - 4 columns */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        {/* Row 1: Core metrics — 2 large cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
           <StatCard
             icon={<PieChart className="w-4 h-4" />}
             label="Token 用量"
-            value={formatTokens(tokenStats.total)}
+            value={formatTokens(usageTotals?.total_tokens ?? tokenStats.total)}
             onClick={() => setUsageDialogOpen(true)}
             subtext={
-              <span className="flex items-center gap-2 text-xs">
+              <span className="flex items-center gap-3 text-xs">
                 <span className="flex items-center text-primary">
                   <ArrowUpRight className="w-3 h-3" />
-                  {formatTokens(tokenStats.input)}
+                  {formatTokens(usageTotals?.input_tokens ?? tokenStats.input)}
                 </span>
                 <span className="flex items-center text-secondary">
                   <ArrowDownRight className="w-3 h-3" />
-                  {formatTokens(tokenStats.output)}
+                  {formatTokens(usageTotals?.output_tokens ?? tokenStats.output)}
+                </span>
+                <span className="text-muted-foreground">
+                  {usageTotals?.sessions_scanned ?? ocStatus?.sessions?.count ?? 0} 会话
                 </span>
               </span>
             }
             accent="primary"
-            detail={
-              <div className="space-y-1.5">
-                <p className="font-medium text-foreground mb-2">Token 用量详情</p>
-                <DetailRow label="总计" value={tokenStats.total.toLocaleString()} />
-                <DetailRow label="上行 (input)" value={tokenStats.input.toLocaleString()} />
-                <DetailRow label="下行 (output)" value={tokenStats.output.toLocaleString()} />
-                {ocStatus?.sessions?.recent && ocStatus.sessions.recent.length > 0 && (
-                  <>
-                    <div className="border-t border-border/30 my-1.5" />
-                    <DetailRow label="Cache read" value={ocStatus.sessions.recent.reduce((s, r) => s + (r.cacheRead ?? 0), 0).toLocaleString()} />
-                    <DetailRow label="Cache write" value={ocStatus.sessions.recent.reduce((s, r) => s + (r.cacheWrite ?? 0), 0).toLocaleString()} />
-                  </>
+          />
+          <StatCard
+            icon={<Activity className="w-4 h-4" />}
+            label="系统健康"
+            value={(() => {
+              let total = 0;
+              let pass = 0;
+              // Gateway running
+              total++;
+              if (isRunning) pass++;
+              // Channels configured
+              const chCount = ocStatus?.channelSummary?.filter(l => !l.startsWith("  ")).length ?? 0;
+              if (chCount > 0) { total++; pass++; }
+              // RPC reachable — prefer gwStatus.rpc_ok (gateway status --json probe)
+              // over ocStatus.gateway.reachable (status --usage --json, may lack scope)
+              total++;
+              const rpcOk = gwStatus?.rpc_ok || ocStatus?.gateway?.reachable;
+              if (rpcOk) pass++;
+              return `${pass}/${total}`;
+            })()}
+            onClick={() => setHealthDialogOpen(true)}
+            subtext={
+              <span className="flex items-center gap-2 text-xs">
+                <span className={cn("flex items-center gap-1", isRunning ? "text-green-500" : "text-destructive")}>
+                  <span className={cn("w-1.5 h-1.5 rounded-full", isRunning ? "bg-green-500" : "bg-destructive")} />
+                  网关{isRunning ? "运行中" : "已停止"}
+                </span>
+                {isRunning && !gwStatus?.rpc_ok && ocStatus?.gateway && !ocStatus.gateway.reachable && (
+                  <span className="text-destructive">
+                    RPC: {ocStatus.gateway.error || "不可达"}
+                  </span>
                 )}
-              </div>
+                {(gwStatus?.rpc_ok || !ocStatus?.gateway || ocStatus.gateway.reachable) && (
+                  <span className="text-muted-foreground">
+                    端口 {gwStatus?.port ?? "—"} · PID {gwStatus?.pid ?? "—"}
+                  </span>
+                )}
+              </span>
+            }
+            accent={isRunning && (gwStatus?.rpc_ok || ocStatus?.gateway?.reachable) ? "success" : "destructive"}
+          />
+        </div>
+
+        {/* Row 2: 模型、通讯工具、会话 */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+          <StatCard
+            icon={<Cpu className="w-4 h-4" />}
+            label="模型"
+            value={(() => {
+              const dp = userModels?.defaultPrimary ?? ocStatus?.sessions?.defaults?.model ?? "";
+              if (!dp) return "—";
+              // defaultPrimary is like "anthropic/claude-sonnet-4-20250514"
+              const parts = dp.split("/");
+              return parts.length > 1 ? parts.slice(1).join("/").split("-").slice(0, 2).join("-") : dp.split("-").slice(0, 2).join("-");
+            })()}
+            onClick={() => setModelsDialogOpen(true)}
+            subtext={
+              (() => {
+                const dp = userModels?.defaultPrimary ?? "";
+                const providerKey = dp.split("/")[0];
+                const modelId = dp.split("/").slice(1).join("/");
+                return dp ? (
+                  <span className="flex items-center gap-2">
+                    {providerKey && (
+                      <span className="text-xs text-primary">{providerKey}</span>
+                    )}
+                    <span className="font-mono text-[10px] opacity-70 truncate">
+                      {modelId || ocStatus?.sessions?.defaults?.model}
+                    </span>
+                  </span>
+                ) : ocStatus?.sessions?.defaults?.model ? (
+                  <span className="font-mono text-[10px] opacity-70">
+                    {ocStatus.sessions.defaults.model}
+                  </span>
+                ) : undefined;
+              })()
+            }
+          />
+          <StatCard
+            icon={<Radio className="w-4 h-4" />}
+            label="通讯工具"
+            value={String(ocStatus?.channelSummary?.filter(l => !l.startsWith("  ")).length ?? 0)}
+            valueLabel="个"
+            onClick={() => setChannelsDialogOpen(true)}
+            subtext={
+              ocStatus?.channelSummary?.[0] ? (
+                <span className="text-xs">{ocStatus.channelSummary.filter(l => !l.startsWith("  ")).map(l => l.split(":")[0]).join(" · ")}</span>
+              ) : undefined
             }
           />
           <StatCard
             icon={<MessageSquare className="w-4 h-4" />}
-            label="会话数"
+            label="会话/请求"
             value={String(ocStatus?.sessions?.count ?? 0)}
+            valueLabel="会话"
+            onClick={() => setSessionsDialogOpen(true)}
             subtext={
               ocStatus?.sessions?.defaults?.model ? (
                 <span className="font-mono text-[10px] opacity-70">
@@ -473,117 +524,68 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
                 </span>
               ) : undefined
             }
-            detail={ocStatus?.sessions ? (
-              <div className="space-y-1.5">
-                <p className="font-medium text-foreground mb-2">会话详情</p>
-                <DetailRow label="总会话数" value={String(ocStatus.sessions.count)} />
-                <DetailRow label="默认模型" value={ocStatus.sessions.defaults?.model ?? "—"} />
-                <DetailRow label="默认 Context" value={`${formatTokens(ocStatus.sessions.defaults?.contextTokens ?? 0)} tokens`} />
-              </div>
-            ) : undefined}
-          />
-          <StatCard
-            icon={<Bot className="w-4 h-4" />}
-            label="Agent"
-            value={String(ocStatus?.agents?.agents?.length ?? 0)}
-            subtext={
-              ocStatus?.agents?.agents?.[0] ? (
-                <span>
-                  {ocStatus.agents.agents[0].id} ·{" "}
-                  {formatAge(ocStatus.agents.agents[0].lastActiveAgeMs)} ago
-                </span>
-              ) : undefined
-            }
-            detail={ocStatus?.agents?.agents && ocStatus.agents.agents.length > 0 ? (
-              <div className="space-y-1.5">
-                <p className="font-medium text-foreground mb-2">Agent 详情</p>
-                <DetailRow label="总会话数" value={String(ocStatus.agents.totalSessions)} />
-                <DetailRow label="默认 Agent" value={ocStatus.agents.defaultId} />
-                {ocStatus.agents.agents.map((a) => (
-                  <div key={a.id} className="border-t border-border/30 pt-1.5 mt-1.5 space-y-0.5">
-                    <DetailRow label="ID" value={a.id} />
-                    <DetailRow label="工作目录" value={a.workspaceDir.split("/").slice(-2).join("/")} />
-                    <DetailRow label="会话数" value={String(a.sessionsCount)} />
-                    <DetailRow label="最近活跃" value={a.lastActiveAgeMs != null ? `${formatAge(a.lastActiveAgeMs)} ago` : "—"} />
-                  </div>
-                ))}
-              </div>
-            ) : undefined}
-          />
-          <StatCard
-            icon={<Clock className="w-4 h-4" />}
-            label="网关延迟"
-            value={
-              ocStatus?.gateway?.reachable
-                ? `${ocStatus.gateway.connectLatencyMs}ms`
-                : "—"
-            }
-            subtext={
-              <span>
-                端口 {gwStatus?.port ?? "—"} · PID {gwStatus?.pid ?? "—"}
-              </span>
-            }
-            accent="success"
-            detail={ocStatus?.gateway ? (
-              <div className="space-y-1.5">
-                <p className="font-medium text-foreground mb-2">网关详情</p>
-                <DetailRow label="模式" value={ocStatus.gateway.mode} />
-                <DetailRow label="URL" value={ocStatus.gateway.url} />
-                <DetailRow label="可达" value={ocStatus.gateway.reachable ? "是" : "否"} />
-                <DetailRow label="延迟" value={`${ocStatus.gateway.connectLatencyMs}ms`} />
-                {ocStatus.gateway.self && (
-                  <>
-                    <div className="border-t border-border/30 my-1.5" />
-                    <DetailRow label="Host" value={ocStatus.gateway.self.host} />
-                    <DetailRow label="版本" value={ocStatus.gateway.self.version} />
-                    <DetailRow label="平台" value={ocStatus.gateway.self.platform} />
-                  </>
-                )}
-              </div>
-            ) : undefined}
+            className="col-span-2 sm:col-span-1"
           />
         </div>
 
-        {/* Second row - 3 columns */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
+        {/* Row 3: 设备、扩展、记忆、审计 */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
           <StatCard
-            icon={<Radio className="w-4 h-4" />}
-            label="通讯工具"
-            value={String(ocStatus?.channelSummary?.filter(l => !l.startsWith("  ")).length ?? 0)}
+            icon={<Monitor className="w-4 h-4" />}
+            label="设备"
+            value={deviceInfo?.model || "—"}
+            onClick={() => setDeviceDialogOpen(true)}
             subtext={
-              ocStatus?.channelSummary?.[0] ? (
-                <span>{ocStatus.channelSummary[0]}</span>
-              ) : undefined
+              deviceInfo?.osVersion ? (
+                <span className="text-xs truncate block max-w-full">
+                  {deviceInfo.osVersion}
+                </span>
+              ) : (
+                <span className="text-xs">暂无数据</span>
+              )
             }
-            detail={ocStatus?.channelSummary && ocStatus.channelSummary.length > 0 ? (
-              <div className="space-y-1.5">
-                <p className="font-medium text-foreground mb-2">通讯工具列表</p>
-                {ocStatus.channelSummary.map((ch, i) => (
-                  <DetailRow key={i} label={ch.startsWith("  ") ? "" : `#${ocStatus!.channelSummary!.slice(0, i).filter(l => !l.startsWith("  ")).length + 1}`} value={ch.trim()} />
-                ))}
-              </div>
-            ) : undefined}
+          />
+          <StatCard
+            icon={<Puzzle className="w-4 h-4" />}
+            label="扩展"
+            value={String(extensionCounts.skills)}
+            valueLabel="技能"
+            onClick={() => setExtensionsDialogOpen(true)}
+            subtext={
+              <span className="text-xs">{extensionCounts.hooks} 钩子</span>
+            }
+          />
+          <StatCard
+            icon={<Database className="w-4 h-4" />}
+            label="记忆"
+            value={String(ocStatus?.memory?.files ?? 0)}
+            valueLabel="文件"
+            onClick={() => setMemoryDialogOpen(true)}
+            subtext={
+              ocStatus?.memory ? (
+                <span className="text-xs">
+                  {ocStatus.memory.chunks} chunks · {ocStatus.memory.backend}
+                </span>
+              ) : (
+                <span>暂无数据</span>
+              )
+            }
           />
           {audit ? (
             <StatCard
               icon={<Shield className="w-4 h-4" />}
               label="安全审计"
-              value={String(audit.critical)}
-              valueLabel="严重"
+              value={audit.critical > 0 ? String(audit.critical) : "0"}
+              valueLabel={audit.critical > 0 ? "严重" : "安全"}
+              onClick={() => setAuditDialogOpen(true)}
               subtext={
-                <span>
-                  {audit.warn} 警告 · {audit.info} 信息
+                <span className="text-xs">
+                  <span className={cn(audit.warn > 0 && "text-yellow-500")}>{audit.warn} 警告</span>
+                  {" · "}
+                  {audit.info} 信息
                 </span>
               }
-              accent="destructive"
-              detail={
-                <div className="space-y-1.5">
-                  <p className="font-medium text-foreground mb-2">安全审计详情</p>
-                  <DetailRow label="严重" value={String(audit.critical)} className="text-destructive" />
-                  <DetailRow label="警告" value={String(audit.warn)} className="text-yellow-500" />
-                  <DetailRow label="信息" value={String(audit.info)} />
-                </div>
-              }
+              accent={audit.critical > 0 ? "destructive" : audit.warn > 0 ? "warning" : "success"}
             />
           ) : (
             <StatCard
@@ -593,169 +595,11 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
               subtext={<span>暂无数据</span>}
             />
           )}
-          <StatCard
-            icon={<Database className="w-4 h-4" />}
-            label="记忆"
-            value={String(ocStatus?.memory?.files ?? 0)}
-            valueLabel="文件"
-            subtext={
-              ocStatus?.memory ? (
-                <span>
-                  {ocStatus.memory.chunks} chunks · {ocStatus.memory.backend}
-                </span>
-              ) : (
-                <span>暂无数据</span>
-              )
-            }
-            className="col-span-2 sm:col-span-1"
-            detail={ocStatus?.memory ? (
-              <div className="space-y-1.5">
-                <p className="font-medium text-foreground mb-2">记忆详情</p>
-                <DetailRow label="文件数" value={String(ocStatus.memory.files)} />
-                <DetailRow label="Chunks" value={String(ocStatus.memory.chunks)} />
-                <DetailRow label="后端" value={ocStatus.memory.backend} />
-              </div>
-            ) : undefined}
-          />
-        </div>
-
-        {/* Main content - two columns */}
-        <div className="grid sm:grid-cols-5 gap-4">
-          {/* Left: Recent Sessions */}
-          <Card className="sm:col-span-3 bg-card/50 border-border/30 overflow-hidden">
-            <div className="px-4 py-3 border-b border-border/30">
-              <h3 className="text-sm font-medium text-foreground">最近会话</h3>
-            </div>
-            <div className="divide-y divide-border/20">
-              {ocStatus?.sessions?.recent && ocStatus.sessions.recent.length > 0 ? (
-                ocStatus.sessions.recent.slice(0, 5).map((s) => (
-                  <div
-                    key={s.sessionId}
-                    className="px-4 py-3 hover:bg-secondary/20 transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-mono text-foreground truncate">
-                          {s.key.replace(/^agent:main:/, "")}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {formatAge(s.age * 1000)} ago · {s.model.slice(0, 16)}
-                        </p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="text-primary flex items-center">
-                            <ArrowUpRight className="w-3 h-3" />
-                            {formatTokens(s.inputTokens)}
-                          </span>
-                          <span className="text-secondary flex items-center">
-                            <ArrowDownRight className="w-3 h-3" />
-                            {formatTokens(s.outputTokens)}
-                          </span>
-                        </div>
-                        {s.contextTokens ? (
-                          <p className="text-[10px] text-muted-foreground mt-0.5">
-                            ctx {formatTokens(s.contextTokens)}
-                          </p>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  暂无会话记录
-                </div>
-              )}
-            </div>
-          </Card>
-
-          {/* Right: Gateway Info */}
-          <Card className="sm:col-span-2 bg-card/50 border-border/30">
-            <div className="px-4 py-3 border-b border-border/30">
-              <h3 className="text-sm font-medium text-foreground">网关状态</h3>
-            </div>
-            <div className="p-4 space-y-3">
-              <InfoRow
-                label="状态"
-                value={isRunning ? "运行中" : "已停止"}
-                status={isRunning ? "success" : "inactive"}
-              />
-              <InfoRow
-                label="PID"
-                value={gwStatus?.pid?.toString() || "—"}
-                mono
-              />
-              <InfoRow
-                label="端口"
-                value={gwStatus?.port?.toString() || "—"}
-                mono
-              />
-              <InfoRow
-                label="地址"
-                value={gwUrl?.wsUrl || "—"}
-                mono
-              />
-              <InfoRow
-                label="RPC"
-                value={
-                  ocStatus?.gateway?.reachable ? "正常" : "异常"
-                }
-                status={ocStatus?.gateway?.reachable ? "success" : "error"}
-              />
-
-              {/* Device info */}
-              {deviceInfo?.serial && (
-                <InfoRow
-                  label="设备序列号"
-                  value={deviceInfo.serial}
-                  mono
-                />
-              )}
-              {deviceInfo?.hardwareUUID && (
-                <InfoRow
-                  label="硬件 UUID"
-                  value={deviceInfo.hardwareUUID}
-                  mono
-                />
-              )}
-
-              {/* Token */}
-              {gwUrl?.token && (
-                <div className="pt-3 border-t border-border/30">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">Token</span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                      onClick={() => {
-                        navigator.clipboard.writeText(gwUrl.token).then(() => {
-                          setTokenCopied(true);
-                          clearTimeout(tokenCopiedTimerRef.current);
-                          tokenCopiedTimerRef.current = setTimeout(() => setTokenCopied(false), 2000);
-                        });
-                      }}
-                    >
-                      {tokenCopied ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-success" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5" />
-                      )}
-                    </Button>
-                  </div>
-                  <code className="block text-xs font-mono text-muted-foreground bg-secondary/30 px-2 py-1.5 rounded truncate">
-                    {gwUrl.token}
-                  </code>
-                </div>
-              )}
-            </div>
-          </Card>
         </div>
 
         {/* Doctor output */}
         {doctorOutput && (
-          <Card className="mt-4 bg-card/50 border-border/30">
+          <Card className="mb-4 bg-card/50 border-border/30">
             <div className="p-4">
               <div className="bg-muted/50 rounded-md p-3 max-h-48 overflow-y-auto font-mono text-xs whitespace-pre-wrap">
                 {doctorOutput}
@@ -785,20 +629,9 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
             />
             <ActionButton
               icon={<RefreshCw className="w-4 h-4" />}
-              label="重置配置"
+              label="配置助手"
               disabled={!!actionLoading}
-              onClick={() =>
-                setPendingAction({
-                  key: "reset",
-                  title: "确认重置配置？",
-                  description:
-                    "将清除当前所有配置并重新进入配置向导。已配置的 API Key、模型选择、频道设置等都会被覆盖。",
-                  confirmLabel: "确认重置",
-                  fn: async () => {
-                    onResetConfig();
-                  },
-                })
-              }
+              onClick={() => onResetConfig()}
             />
             <ActionButton
               icon={<Wrench className="w-4 h-4" />}
@@ -908,12 +741,12 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
           if (!open) setPendingAction(null);
         }}
       >
-        <DialogContent>
+        <DialogContent className="min-w-2xl max-w-4xl">
           <DialogHeader>
             <DialogTitle>{pendingAction?.title}</DialogTitle>
             <DialogDescription>{pendingAction?.description}</DialogDescription>
           </DialogHeader>
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-2 bg-transparent border-t-0">
             <Button
               variant="outline"
               onClick={() => setPendingAction(null)}
@@ -937,7 +770,8 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
                   }
                   await refresh();
                 } catch (e) {
-                  setError(e instanceof Error ? e.message : String(e));
+                  console.error("[Dashboard] action failed:", e);
+                  setError("操作执行失败，请稍后重试");
                 } finally {
                   setActionLoading(null);
                 }
@@ -951,6 +785,54 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
 
       {/* Usage stats dialog */}
       <UsageDialog open={usageDialogOpen} onOpenChange={setUsageDialogOpen} />
+
+      {/* Sessions dialog */}
+      <SessionsDialog
+        open={sessionsDialogOpen}
+        onOpenChange={setSessionsDialogOpen}
+        sessions={ocStatus?.sessions?.recent ?? []}
+        totalCount={ocStatus?.sessions?.count ?? 0}
+        totalRequests={usageTotals?.requests ?? 0}
+        defaults={ocStatus?.sessions?.defaults}
+      />
+
+      {/* Audit dialog */}
+      <AuditDialog
+        open={auditDialogOpen}
+        onOpenChange={setAuditDialogOpen}
+        summary={audit ?? { critical: 0, warn: 0, info: 0 }}
+        findings={(ocStatus?.securityAudit as Record<string, unknown>)?.findings as AuditFinding[] ?? []}
+      />
+
+      {/* Health dialog */}
+      <HealthDialog
+        open={healthDialogOpen}
+        onOpenChange={setHealthDialogOpen}
+        gwStatus={gwStatus}
+        gwUrl={gwUrl}
+        rpcGateway={ocStatus?.gateway}
+        channelSummary={ocStatus?.channelSummary}
+      />
+
+      {/* Models dialog */}
+      <ModelsDialog
+        open={modelsDialogOpen}
+        onOpenChange={setModelsDialogOpen}
+        defaultModel={ocStatus?.sessions?.defaults?.model}
+        onRefresh={refresh}
+      />
+
+      {/* Channels dialog */}
+      <ChannelsDialog open={channelsDialogOpen} onOpenChange={setChannelsDialogOpen} />
+
+      {/* Extensions dialog */}
+      <ExtensionsDialog open={extensionsDialogOpen} onOpenChange={setExtensionsDialogOpen} />
+
+      {/* Memory dialog */}
+      <MemoryDialog open={memoryDialogOpen} onOpenChange={setMemoryDialogOpen} />
+
+      {/* Device dialog */}
+      <DeviceDialog open={deviceDialogOpen} onOpenChange={setDeviceDialogOpen} deviceInfo={deviceInfo} />
     </div>
   );
 }

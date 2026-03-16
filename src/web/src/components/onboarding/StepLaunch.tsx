@@ -1,18 +1,9 @@
-// Step 5: Confirm & Launch — runs onboard, merges config, starts gateway
+// Step 6: 唤醒龙虾 — animated launch button + model check
 import { useState, useCallback } from "react";
-import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 
 import { Button } from "../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
-import { Badge } from "../ui/badge";
-import { ScrollArea } from "../ui/scroll-area";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "../ui/dialog";
+import { cn } from "@/lib/utils";
 
 import {
   runOnboard,
@@ -20,13 +11,11 @@ import {
   saveConfig,
   gatewayRestart,
   fetchGatewayStatus,
-  fetchGatewayUrl,
+  devicesAutoApprove,
 } from "../../lib/api";
 
 import type { ProviderEntry } from "./StepModels";
 import { useOnboardingStore } from "../../stores/onboarding";
-
-// Re-export the metadata lookup so we can use it here
 import { getProviderMeta } from "./providerMeta";
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -38,7 +27,6 @@ interface Props {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/** Generate a provider key for the openclaw config */
 function providerKey(p: ProviderEntry): string {
   if (p.customKey) return p.customKey;
   if (p.id.startsWith("custom-") && p.baseUrl) {
@@ -57,24 +45,23 @@ function providerKey(p: ProviderEntry): string {
 export function StepLaunch({ onBack, onComplete }: Props) {
   const models = useOnboardingStore((s) => s.modelsConfig);
   const channels = useOnboardingStore((s) => s.channelsConfig);
+  const done = useOnboardingStore((s) => s.launchDone);
+  const setLaunchDone = useOnboardingStore((s) => s.setLaunchDone);
   const [status, setStatus] = useState("");
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState("");
-  const [done, setDone] = useState(false);
-  const [dashboardUrl, setDashboardUrl] = useState("");
-  const [showDialog, setShowDialog] = useState(false);
 
   const defaultProvider = models.providers.find(
     (p) => p.id === models.defaultProvider && p.enabled,
   );
   const { feishu, telegram } = channels;
+  const hasModel = !!defaultProvider?.selectedModel;
 
   const handleLaunch = useCallback(async () => {
-    setShowDialog(true);
     setLaunching(true);
     setError("");
     try {
-      // ── 1. Run openclaw onboard (base config + daemon install) ──────
+      // 1. Run openclaw onboard
       setStatus("正在初始化 OpenClaw…");
       await runOnboard({
         auth_choice: "skip",
@@ -86,42 +73,23 @@ export function StepLaunch({ onBack, onComplete }: Props) {
         skip_ui: true,
       });
 
-      // ── 2. Read back the generated config ──────────────────────────
+      // 2. Read back config
       setStatus("正在配置模型和通讯软件…");
       const existingConfig =
         ((await fetchConfig()) as Record<string, unknown>) ?? {};
 
-      // ── 3. Merge models.providers ──────────────────────────────────
+      // 3. Merge models.providers
       const modelsSection =
         (existingConfig.models as Record<string, unknown>) ?? {};
       const providersObj: Record<string, unknown> =
         (modelsSection.providers as Record<string, unknown>) ?? {};
 
-      // Built-in providers that are in the pi-ai catalog don't need a
-      // models.providers entry — they only need env + model ref.
-      // Providers that need baseUrl or custom config DO need an entry.
       const BUILTIN_NO_ENTRY = new Set([
-        "anthropic",
-        "openai",
-        "openai-codex",
-        "google",
-        "groq",
-        "mistral",
-        "xai",
-        "openrouter",
-        "opencode",
-        "cerebras",
-        "huggingface",
-        "zai",
-        "together",
-        "kilocode",
-        "venice",
-        "kimi-coding",
-        "volcengine",
-        "byteplus",
+        "anthropic", "openai", "openai-codex", "google", "groq", "mistral",
+        "xai", "openrouter", "opencode", "cerebras", "huggingface", "zai",
+        "together", "kilocode", "venice", "kimi-coding", "volcengine", "byteplus",
       ]);
 
-      // Collect env vars to set
       const envObj: Record<string, string> =
         (existingConfig.env as Record<string, string>) ?? {};
 
@@ -137,40 +105,30 @@ export function StepLaunch({ onBack, onComplete }: Props) {
           p.authMode === "plugin-oauth" ||
           p.authMode === "setup-token";
 
-        // Set env var for API key
         if (p.apiKey && meta?.envKey && p.authMode === "apiKey") {
           envObj[meta.envKey] = p.apiKey;
         }
 
         if ((BUILTIN_NO_ENTRY.has(p.id) && !p.baseUrl) || isOAuth) {
-          // Built-in or OAuth: no models.providers entry needed
+          // no entry needed
         } else {
           const entry: Record<string, unknown> = {};
-
           if (p.apiKey) entry.apiKey = p.apiKey;
           if (p.baseUrl) entry.baseUrl = p.baseUrl;
-
           if (meta?.api) entry.api = meta.api;
           if (p.api && p.id.startsWith("custom-")) entry.api = p.api;
-
-          if (p.id === "amazon-bedrock") {
-            entry.auth = "aws-sdk";
-          }
-
+          if (p.id === "amazon-bedrock") entry.auth = "aws-sdk";
           if (p.selectedModel) {
-            entry.models = [
-              {
-                id: p.selectedModel,
-                name: p.customModelName || `${p.selectedModel} (${p.label || key})`,
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 16000,
-                maxTokens: 4096,
-              },
-            ];
+            entry.models = [{
+              id: p.selectedModel,
+              name: p.customModelName || `${p.selectedModel} (${p.label || key})`,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 16000,
+              maxTokens: 4096,
+            }];
           }
-
           providersObj[key] = entry;
         }
 
@@ -179,9 +137,7 @@ export function StepLaunch({ onBack, onComplete }: Props) {
         }
       }
 
-      if (Object.keys(envObj).length > 0) {
-        existingConfig.env = envObj;
-      }
+      if (Object.keys(envObj).length > 0) existingConfig.env = envObj;
 
       existingConfig.models = {
         ...modelsSection,
@@ -189,7 +145,6 @@ export function StepLaunch({ onBack, onComplete }: Props) {
         providers: providersObj,
       };
 
-      // agents.defaults.model.primary
       const agents = (existingConfig.agents as Record<string, unknown>) ?? {};
       const defaults = (agents.defaults as Record<string, unknown>) ?? {};
       const modelDefaults = (defaults.model as Record<string, unknown>) ?? {};
@@ -201,7 +156,7 @@ export function StepLaunch({ onBack, onComplete }: Props) {
         },
       };
 
-      // ── 4. Merge channels (通讯软件) ──────────────────────────────────
+      // 4. Merge channels
       const channelsObj: Record<string, unknown> =
         (existingConfig.channels as Record<string, unknown>) ?? {};
 
@@ -212,9 +167,8 @@ export function StepLaunch({ onBack, onComplete }: Props) {
           appSecret: feishu.appSecret,
           connectionMode: feishu.connectionMode,
           domain: feishu.domain,
-          groupPolicy: feishu.groupPolicy,
-          dmPolicy: feishu.dmPolicy,
-          allowFrom: ["*"],
+          dmPolicy: "pairing",
+          groups: { "*": { requireMention: true } },
         };
       }
 
@@ -222,49 +176,57 @@ export function StepLaunch({ onBack, onComplete }: Props) {
         channelsObj.telegram = {
           enabled: true,
           botToken: telegram.botToken,
-          groupPolicy: telegram.groupPolicy,
-          dmPolicy: telegram.dmPolicy,
-          allowFrom: ["*"],
+          dmPolicy: "pairing",
+          groups: { "*": { requireMention: true } },
         };
       }
 
       existingConfig.channels = channelsObj;
 
-      // ── 5. Save merged config ──────────────────────────────────────
+      // 4.5 Ensure gateway defaults are set
+      const gwSection = (existingConfig.gateway as Record<string, unknown>) ?? {};
+      if (!gwSection.trustedProxies) {
+        gwSection.trustedProxies = ["127.0.0.1"];
+      }
+      // Ensure controlUi.allowedOrigins so the web dashboard can reach the gateway
+      if (!gwSection.controlUi) {
+        gwSection.controlUi = {
+          allowedOrigins: ["http://127.0.0.1:18789"],
+        };
+      }
+      existingConfig.gateway = gwSection;
+
+      // 5. Save
       setStatus("正在保存配置…");
       await saveConfig(existingConfig);
 
-      // ── 6. Restart gateway ─────────────────────────────────────────
-      setStatus("正在重启门户（Gateway）…");
+      // 6. Restart gateway
+      setStatus("正在唤醒龙虾…");
       await gatewayRestart();
 
-      // ── 7. Poll gateway until reachable ────────────────────────────
-      setStatus("等待门户（Gateway）启动…");
+      // 7. Poll until running, then auto-approve device pairing
+      setStatus("龙虾正在苏醒…");
       for (let i = 0; i < 20; i++) {
         await new Promise((r) => setTimeout(r, 1500));
         try {
           const gs = await fetchGatewayStatus();
           if (gs.running) {
-            // Get dashboard URL
+            // Gateway is up — auto-approve pending device pairing requests
+            setStatus("正在完成设备配对…");
             try {
-              const url = await fetchGatewayUrl();
-              setDashboardUrl(url.httpUrl);
-            } catch {
-              /* ok */
-            }
-            setStatus("Gateway 已启动 ✓");
-            setDone(true);
+              await devicesAutoApprove();
+            } catch { /* non-fatal */ }
+            setStatus("龙虾已苏醒 🦞");
+            setLaunchDone(true);
             return;
           }
-        } catch {
-          /* keep polling */
-        }
+        } catch { /* keep polling */ }
       }
 
-      setStatus("Gateway 启动超时，请稍后在 Dashboard 中检查状态。");
-      setDone(true);
+      setStatus("唤醒超时，请稍后在 Dashboard 中检查状态。");
+      setLaunchDone(true);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "启动失败");
+      setError(e instanceof Error ? e.message : "唤醒失败");
     } finally {
       setLaunching(false);
     }
@@ -272,129 +234,121 @@ export function StepLaunch({ onBack, onComplete }: Props) {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="shrink-0 px-4 pb-4">
-        <h2 className="text-lg font-semibold">确认并启动</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          检查配置摘要，然后启动 OpenClaw Gateway。
-        </p>
+      {/* Content area */}
+      <div className="flex-1 min-h-0 flex flex-col items-center justify-center px-4 py-8">
+        {/* Model warning */}
+        {!hasModel && !done && (
+          <div className="mb-6 w-full max-w-sm flex items-start gap-2.5 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <div className="text-xs leading-relaxed">
+              你还没有配置 AI 模型。唤醒后龙虾将无法处理消息。
+              <br />
+              建议先返回第 1 步配置至少一个模型。
+            </div>
+          </div>
+        )}
+
+        {/* Lobster + button area */}
+        {!done ? (
+          <div className="flex flex-col items-center gap-6">
+            {/* Sleeping lobster */}
+            <div className="relative">
+              <div
+                className={cn(
+                  "absolute inset-0 rounded-full scale-150 transition-all duration-1000",
+                  launching
+                    ? "blur-3xl bg-orange-500/30 animate-pulse"
+                    : "blur-3xl bg-muted-foreground/5",
+                )}
+              />
+              <span
+                className={cn(
+                  "relative z-10 block text-7xl transition-transform duration-500",
+                  launching && "animate-bounce",
+                )}
+              >
+                🦞
+              </span>
+              {!launching && (
+                <span className="absolute -top-2 -right-2 text-2xl animate-pulse">
+                  💤
+                </span>
+              )}
+            </div>
+
+            <div className="text-center">
+              <h2 className="text-xl font-bold tracking-tight mb-1">
+                {launching ? "龙虾正在苏醒…" : "龙虾还在沉睡"}
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {launching
+                  ? status || "请稍候…"
+                  : "一切就绪，点击下方按钮唤醒你的 AI 龙虾助手。"}
+              </p>
+            </div>
+
+            {/* The cool launch button */}
+            <button
+              onClick={handleLaunch}
+              disabled={launching}
+              className={cn(
+                "install-btn relative px-10 py-4 rounded-2xl font-bold text-lg",
+                "transition-all duration-300 ease-out",
+                "bg-gradient-to-r from-orange-500 via-red-500 to-orange-600",
+                "text-white",
+                "hover:scale-105",
+                "active:scale-95",
+                "disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+              )}
+            >
+              <span className="relative z-10 flex items-center gap-2">
+                {launching ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    唤醒中…
+                  </>
+                ) : (
+                  <>
+                    🔥 唤醒龙虾
+                  </>
+                )}
+              </span>
+            </button>
+
+            {error && (
+              <p className="text-sm text-destructive mt-2">{error}</p>
+            )}
+          </div>
+        ) : (
+          /* Success state */
+          <div className="flex flex-col items-center gap-6">
+            <div className="relative">
+              <div className="absolute inset-0 blur-3xl bg-emerald-500/20 rounded-full scale-150 animate-pulse" />
+              <span className="relative z-10 block text-7xl">🦞</span>
+              <span className="absolute -top-1 -right-1 text-2xl">✨</span>
+            </div>
+
+            <div className="text-center">
+              <h2 className="text-xl font-bold tracking-tight text-emerald-500 mb-1">
+                龙虾已苏醒！
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                OpenClaw Gateway 已启动，你的 AI 助手已准备就绪。
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
-      <ScrollArea className="flex-1 min-h-0 overflow-hidden">
-        <div>
-          <div className="flex flex-col gap-4 pb-4 px-4">
-            {/* Models summary */}
-            <Card className="border border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">AI 模型</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                {!defaultProvider ? (
-                  <p className="text-xs text-muted-foreground">未配置</p>
-                ) : (
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2 text-xs">
-                      <Badge variant="secondary" className="text-[10px]">
-                        {defaultProvider.label || defaultProvider.id}
-                      </Badge>
-                      <span className="text-muted-foreground">
-                        {defaultProvider.selectedModel || "(未选模型)"}
-                      </span>
-                      {defaultProvider.authMode === "oauth" ||
-                      defaultProvider.authMode === "plugin-oauth" ? (
-                        <Badge
-                          variant={
-                            defaultProvider.authenticated
-                              ? "secondary"
-                              : "outline"
-                          }
-                          className="text-[10px]"
-                        >
-                          {defaultProvider.authenticated
-                            ? "OAuth ✓"
-                            : "OAuth ✗"}
-                        </Badge>
-                      ) : null}
-                      <Badge className="text-[10px]">默认</Badge>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Channels summary — only show enabled ones */}
-            <Card className="border border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">通讯软件</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                {!feishu.enabled && !telegram.enabled ? (
-                  <p className="text-xs text-muted-foreground">未配置</p>
-                ) : (
-                  <div className="flex gap-2">
-                    {feishu.enabled && (
-                      <Badge variant="secondary">飞书 ✓</Badge>
-                    )}
-                    {telegram.enabled && (
-                      <Badge variant="secondary">Telegram ✓</Badge>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Skills summary */}
-            <Card className="border border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Skills</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <p className="text-xs text-muted-foreground">
-                  自动检测，无需手动配置
-                </p>
-              </CardContent>
-            </Card>
-
-            {/* Hooks summary */}
-            <Card className="border border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Hooks</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <p className="text-xs text-muted-foreground">
-                  自动检测，无需手动配置
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </ScrollArea>
-
-      {/* Status area */}
-      {(status || error) && (
-        <Card
-          className={`mx-4 mb-4 shrink-0 ${error ? "border border-destructive" : "border border-border"}`}
-        >
-          <CardContent>
-            {error ? (
-              <p className="text-sm text-destructive">{error}</p>
-            ) : (
-              <p className="text-sm text-muted-foreground">{status}</p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
+      {/* Footer */}
       <div className="shrink-0 flex justify-between pt-4 px-4 border-t border-border">
         <Button variant="outline" onClick={onBack} disabled={launching}>
           ← 上一步
         </Button>
-        {done ? (
-          <Button onClick={onComplete}>完成配置 →</Button>
-        ) : (
-          <Button onClick={handleLaunch} disabled={launching}>
-            {launching ? "启动中…" : "🚀 启动 OpenClaw"}
-          </Button>
-        )}
+        <Button onClick={onComplete} disabled={launching}>
+          下一步 →
+        </Button>
       </div>
     </div>
   );

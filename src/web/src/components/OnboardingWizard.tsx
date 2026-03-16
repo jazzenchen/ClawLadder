@@ -1,4 +1,5 @@
 // OnboardingWizard — orchestrates 5-step setup using Tabs + zustand store
+import { useEffect } from "react";
 import { CheckCircle2 } from "lucide-react";
 
 import { Tabs, TabsContent } from "./ui/tabs";
@@ -8,6 +9,7 @@ import { StepModels } from "./onboarding/StepModels";
 import { StepChannels } from "./onboarding/StepChannels";
 import { StepSkills } from "./onboarding/StepSkills";
 import { StepHooks } from "./onboarding/StepHooks";
+import { StepPairing } from "./onboarding/StepPairing";
 import { StepLaunch } from "./onboarding/StepLaunch";
 
 import { useOnboardingStore, STEPS, selectStepId, type StepId } from "../stores/onboarding";
@@ -28,6 +30,23 @@ export function OnboardingWizard({ onComplete, onExit }: Props) {
   const goToStep = useOnboardingStore((s) => s.goToStep);
   const goNext = useOnboardingStore((s) => s.goNext);
   const goBack = useOnboardingStore((s) => s.goBack);
+  const configLoaded = useOnboardingStore((s) => s.configLoaded);
+
+  // Reset store and load existing config every time the wizard mounts
+  useEffect(() => {
+    const store = useOnboardingStore.getState();
+    store.reset();
+    store.loadFromConfig();
+  }, []);
+
+  // Show a brief loading state while reading existing config
+  if (!configLoaded) {
+    return (
+      <div className="h-full min-h-0 w-full max-w-4xl mx-auto flex items-center justify-center p-6">
+        <p className="text-sm text-muted-foreground">正在读取配置…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full min-h-0 w-full max-w-4xl mx-auto flex flex-col p-6">
@@ -52,7 +71,7 @@ export function OnboardingWizard({ onComplete, onExit }: Props) {
               disabled={isFuture}
               onClick={() => !isFuture && goToStep(s.id)}
               className={`
-                flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium
+                flex items-center gap-2 px-3 py-1.5 rounded-full text-sm 
                 transition-colors select-none
                 ${isCurrent
                   ? "bg-muted text-foreground"
@@ -107,7 +126,11 @@ export function OnboardingWizard({ onComplete, onExit }: Props) {
             </TabsContent>
 
             <TabsContent value="launch" className="mt-0 flex flex-col flex-1 min-h-0 data-[state=inactive]:hidden">
-              <StepLaunch onBack={goBack} onComplete={onComplete} />
+              <StepLaunch onBack={goBack} onComplete={goNext} />
+            </TabsContent>
+
+            <TabsContent value="pairing" className="mt-0 flex flex-col flex-1 min-h-0 data-[state=inactive]:hidden">
+              <StepPairing onBack={goBack} onComplete={onComplete} />
             </TabsContent>
           </CardContent>
         </Card>

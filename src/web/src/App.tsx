@@ -4,7 +4,7 @@ import { Dashboard } from "./components/Dashboard";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { InstallingView, useInstallLogs } from "./components/InstallingView";
 import { InitializingView } from "./components/InitializingView";
-import { WelcomeView } from "./components/WelcomeView";
+import { WelcomeView, type InstallSettings } from "./components/WelcomeView";
 import { PasswordDialog } from "./components/PasswordDialog";
 import { InstalledView } from "./components/InstalledView";
 import { ErrorView } from "./components/ErrorView";
@@ -47,9 +47,12 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState("");
   const [errorDetail, setErrorDetail] = useState("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const [verbose, setVerbose] = useState(false);
-  const [useHomebrew, setUseHomebrew] = useState(false);
-  const [useChinaMirror, setUseChinaMirror] = useState(true);
+  const [installSettings, setInstallSettings] = useState<InstallSettings>({
+    mode: "quick",
+    verbose: false,
+    useHomebrew: false,
+    useChinaMirror: true,
+  });
   const [statusInfo, setStatusInfo] = useState<StatusInfo | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [useStructuredUI, setUseStructuredUI] = useState(false);
@@ -77,7 +80,10 @@ export default function App() {
 
   // ── Handlers ────────────────────────────────────────────────────────────
 
-  const handleInstallClick = async () => {
+  const handleInstallClick = async (settings: InstallSettings) => {
+    setInstallSettings(settings);
+    const { verbose, useHomebrew, useChinaMirror } = settings;
+
     if (useHomebrew) {
       setPassword("");
       setPasswordError("");
@@ -113,7 +119,7 @@ export default function App() {
         setValidating(false);
         return;
       }
-      const sid = await startInstall(password, verbose, true, useChinaMirror);
+      const sid = await startInstall(password, installSettings.verbose, true, installSettings.useChinaMirror);
       setSessionId(sid);
       setPhase("installing");
     } catch (e) {
@@ -169,7 +175,7 @@ export default function App() {
             安装正在进行中，取消可能导致安装不完整。
           </DialogDescription>
         </DialogHeader>
-        <DialogFooter className="gap-2">
+        <DialogFooter className="gap-2 bg-transparent border-t-0">
           <Button variant="outline" onClick={() => setShowCancelConfirm(false)}>
             继续安装
           </Button>
@@ -207,12 +213,6 @@ export default function App() {
   if (phase === "idle") {
     return (
       <WelcomeView
-        verbose={verbose}
-        setVerbose={setVerbose}
-        useHomebrew={useHomebrew}
-        setUseHomebrew={setUseHomebrew}
-        useChinaMirror={useChinaMirror}
-        setUseChinaMirror={setUseChinaMirror}
         onInstall={handleInstallClick}
       />
     );
@@ -278,7 +278,7 @@ export default function App() {
       <InstalledView
         statusInfo={statusInfo}
         onConfigure={() => setPhase("initializing")}
-        onSkipToDashboard={() => setPhase("dashboard")}
+        onBack={statusInfo?.configured ? () => setPhase("dashboard") : undefined}
       />
     );
   }

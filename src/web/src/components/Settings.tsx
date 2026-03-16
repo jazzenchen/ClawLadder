@@ -192,7 +192,7 @@ export function Settings({ onBack }: SettingsProps) {
           <Button variant="ghost" size="sm" onClick={onBack}>
             ← 返回
           </Button>
-          <h1 className="text-lg font-medium">设置</h1>
+          <h1 className="text-lg ">设置</h1>
         </div>
         <div className="flex items-center gap-2">
           {saved && <span className="text-sm text-green-500">已保存 ✓</span>}

@@ -29,8 +29,10 @@ struct AppState {
 }
 
 pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) -> Result<(), String> {
+    tracing::info!(port, dist_dir = %dist_dir.display(), "[startup] run_server called");
+
     let install_script = find_install_script();
-    tracing::info!(path = %install_script.display(), "Install script located");
+    tracing::info!(path = %install_script.display(), "[startup] Install script located");
 
     let state = AppState {
         registry: Arc::new(dashmap::DashMap::new()),
@@ -81,8 +83,27 @@ pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) -> Result<
         .route("/api/models/auth/login", post(models_auth_login_handler))
         .route("/api/models/auth/status", get(models_auth_status_handler))
         .route("/api/plugins/enable", post(plugins_enable_handler))
+        // Health
+        .route("/api/health", get(health_handler))
+        // Channels management
+        .route("/api/channels/status", get(channels_status_handler))
+        // Pairing
+        .route("/api/pairing/list", get(pairing_list_handler))
+        .route("/api/pairing/approve", post(pairing_approve_handler))
+        // Agents management
+        .route("/api/agents/list", get(agents_list_handler))
+        .route("/api/agents/add", post(agents_add_handler))
+        .route("/api/agents/delete", post(agents_delete_handler))
+        .route("/api/agents/set-identity", post(agents_set_identity_handler))
+        // Memory
+        .route("/api/memory/status", get(memory_status_handler))
+        // Plugins list & disable
+        .route("/api/plugins/list", get(plugins_list_handler))
+        .route("/api/plugins/disable", post(plugins_disable_handler))
         // Device info
         .route("/api/device/serial", get(device_serial_handler))
+        // Device pairing: auto-approve pending requests
+        .route("/api/devices/auto-approve", post(devices_auto_approve_handler))
         // Usage stats (JSONL scan)
         .route("/api/usage", get(usage_stats_handler))
         // WebSocket
@@ -93,11 +114,13 @@ pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) -> Result<
         );
 
     let addr = format!("127.0.0.1:{}", port);
-    tracing::info!(addr = %addr, "Server running");
+    tracing::info!(addr = %addr, "[startup] Binding TCP listener");
 
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
+        tracing::error!(addr = %addr, error = %e, "[startup] Failed to bind port");
         format!("无法绑定端口 {} — 可能已被占用: {}", port, e)
     })?;
+    tracing::info!(addr = %addr, "[startup] Server ready and listening");
     axum::serve(listener, app).await.map_err(|e| {
         format!("服务器运行出错: {}", e)
     })?;
@@ -186,20 +209,56 @@ async fn sudo_validate(
     }
 }
 
-/// Return the device serial number (macOS: IOPlatformSerialNumber, Linux: /etc/machine-id).
+/// Return device info: serial, UUID, model, chip, memory, OS version, disk.
 async fn device_serial_handler() -> Json<serde_json::Value> {
-    let (serial, hardware_uuid) = tokio::task::spawn_blocking(|| {
+    let info = tokio::task::spawn_blocking(|| {
         let serial = get_macos_serial().unwrap_or_default();
         let uuid = get_macos_hardware_uuid().unwrap_or_default();
-        (serial, uuid)
+        let model = get_macos_model().unwrap_or_default();
+        let chip = get_macos_chip().unwrap_or_default();
+        let memory = get_macos_memory().unwrap_or_default();
+        let os_version = get_macos_os_version().unwrap_or_default();
+        let disk = get_macos_disk().unwrap_or_default();
+        serde_json::json!({
+            "serial": serial,
+            "hardwareUUID": uuid,
+            "model": model,
+            "chip": chip,
+            "memory": memory,
+            "osVersion": os_version,
+            "disk": disk,
+        })
     })
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|_| serde_json::json!({}));
 
-    Json(serde_json::json!({
-        "serial": serial,
-        "hardwareUUID": hardware_uuid,
-    }))
+    Json(info)
+}
+
+/// POST /api/devices/auto-approve — auto-approve all pending device pairing requests
+async fn devices_auto_approve_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    tracing::info!("[device-pairing] Auto-approve endpoint called");
+    let result = tokio::task::spawn_blocking(|| {
+        // First trigger a gateway status probe to generate any pending requests
+        let status = gateway::gateway_status();
+        tracing::info!(
+            running = status.running,
+            rpc_ok = status.rpc_ok,
+            "[device-pairing] Gateway status before auto-approve"
+        );
+        if status.rpc_ok {
+            tracing::info!("[device-pairing] RPC already OK, skipping");
+            return (0, true);
+        }
+        let n = gateway::auto_approve_pending_devices();
+        (n, status.rpc_ok)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+
+    let (approved, rpc_ok) = result;
+    tracing::info!(approved, rpc_ok, "[device-pairing] Auto-approve result");
+    Ok(Json(serde_json::json!({ "approved": approved, "rpcOk": rpc_ok })))
 }
 
 fn get_macos_serial() -> Option<String> {
@@ -226,6 +285,91 @@ fn get_macos_hardware_uuid() -> Option<String> {
     for line in text.lines() {
         if line.contains("IOPlatformUUID") {
             return line.split('"').nth(3).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+fn get_macos_model() -> Option<String> {
+    let output = std::process::Command::new("system_profiler")
+        .args(["SPHardwareDataType", "-detailLevel", "mini"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Model Name:") || trimmed.starts_with("型号名称") {
+            return trimmed.split(':').nth(1).map(|s| s.trim().to_string());
+        }
+    }
+    None
+}
+
+fn get_macos_chip() -> Option<String> {
+    let output = std::process::Command::new("system_profiler")
+        .args(["SPHardwareDataType", "-detailLevel", "mini"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Chip:") || trimmed.starts_with("芯片") {
+            return trimmed.split(':').nth(1).map(|s| s.trim().to_string());
+        }
+    }
+    None
+}
+
+fn get_macos_memory() -> Option<String> {
+    let output = std::process::Command::new("system_profiler")
+        .args(["SPHardwareDataType", "-detailLevel", "mini"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Memory:") || trimmed.starts_with("内存") {
+            return trimmed.split(':').nth(1).map(|s| s.trim().to_string());
+        }
+    }
+    None
+}
+
+fn get_macos_os_version() -> Option<String> {
+    let output = std::process::Command::new("sw_vers")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut name = String::new();
+    let mut ver = String::new();
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("ProductName:") {
+            name = v.trim().to_string();
+        }
+        if let Some(v) = line.strip_prefix("ProductVersion:") {
+            ver = v.trim().to_string();
+        }
+    }
+    if name.is_empty() && ver.is_empty() {
+        return None;
+    }
+    Some(format!("{} {}", name, ver).trim().to_string())
+}
+
+fn get_macos_disk() -> Option<String> {
+    // Get total disk size from diskutil
+    let output = std::process::Command::new("diskutil")
+        .args(["info", "/"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Disk Size:") || trimmed.starts_with("Container Total Space:") {
+            return trimmed.split(':').nth(1).map(|s| {
+                // e.g. "494.38 GB (494384795648 Bytes)" → "494.38 GB"
+                s.trim().split('(').next().unwrap_or(s.trim()).trim().to_string()
+            });
         }
     }
     None
@@ -1484,19 +1628,52 @@ fn run_openclaw_raw(args: &str) -> (String, String, bool) {
     clawladder_core::gateway::run_openclaw_cmd(args)
 }
 
-/// Helper: run an openclaw CLI command and return parsed JSON
+/// Helper: run an openclaw CLI command and return parsed JSON.
+///
+/// OpenClaw plugins may dump log lines (e.g. `[plugins] feishu_doc: ...`) to
+/// stdout both *before* and *after* the actual JSON payload.  We therefore:
+///   1. Skip to the first `{` (or a `[` that looks like a JSON array).
+///   2. Use a streaming deserializer so trailing non-JSON text is ignored.
 fn run_openclaw_json(args: &str) -> Result<serde_json::Value, String> {
     let (stdout, stderr, success) = run_openclaw_raw(args);
     if !success {
         return Err(format!("{}{}", stderr, if stderr.is_empty() { &stdout } else { "" }));
     }
-    // JSON may be preceded by warning/banner lines
-    let json_start = stdout.find('{').or_else(|| stdout.find('['));
+    let json_start = find_json_start(&stdout);
     match json_start {
-        Some(pos) => serde_json::from_str(&stdout[pos..])
-            .map_err(|e| format!("JSON parse error: {}", e)),
+        Some(pos) => {
+            let mut de = serde_json::Deserializer::from_str(&stdout[pos..]);
+            serde_json::Value::deserialize(&mut de)
+                .map_err(|e| format!("JSON parse error: {}", e))
+        }
         None => Err(format!("No JSON in output: {}", &stdout[..stdout.len().min(200)])),
     }
+}
+
+/// Find the byte-offset of the first JSON value in `s`.
+/// Prefers `{` (object). Falls back to `[` only when it genuinely starts a
+/// JSON array (next non-whitespace is `{`, `]`, `"`, digit, etc.) — skips
+/// `[plugins] ...` log lines.
+fn find_json_start(s: &str) -> Option<usize> {
+    s.find('{').or_else(|| {
+        let mut from = 0;
+        while let Some(pos) = s[from..].find('[') {
+            let abs = from + pos;
+            let after = s[abs + 1..].trim_start();
+            if after.starts_with('{')
+                || after.starts_with(']')
+                || after.starts_with('"')
+                || after.starts_with("true")
+                || after.starts_with("false")
+                || after.starts_with("null")
+                || after.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+            {
+                return Some(abs);
+            }
+            from = abs + 1;
+        }
+        None
+    })
 }
 
 /// GET /api/skills/list — returns eligible skills with descriptions
@@ -1940,6 +2117,347 @@ async fn plugins_enable_handler(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
 
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+/// GET /api/health — openclaw health --json
+async fn health_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| run_openclaw_json("health --json"))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Channels management
+// ---------------------------------------------------------------------------
+
+/// GET /api/channels/status — openclaw channels status --json, enriched with paired-user counts
+async fn channels_status_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| {
+        let status = run_openclaw_json("channels status --json")?;
+        // Enrich with paired-user lists from allowFrom files
+        let home = std::env::var("HOME").unwrap_or_default();
+        let creds_dir = format!("{}/.openclaw/credentials", home);
+        let mut paired_users: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        if let Ok(entries) = std::fs::read_dir(&creds_dir) {
+            for entry in entries.flatten() {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                // Pattern: <channel>-<account>-allowFrom.json
+                if let Some(rest) = fname.strip_suffix("-allowFrom.json") {
+                    if let Some(data) = std::fs::read_to_string(entry.path()).ok() {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
+                            let ids = parsed.get("allowFrom")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+                            // rest is e.g. "feishu-default" — extract channel name (first segment)
+                            let channel = rest.split('-').next().unwrap_or(rest);
+                            // Accumulate across accounts
+                            let existing = paired_users.entry(channel.to_string())
+                                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+                            if let serde_json::Value::Array(arr) = existing {
+                                arr.extend(ids);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Attach pairedUsers to the status object
+        let mut obj = match status {
+            serde_json::Value::Object(m) => m,
+            other => {
+                let mut m = serde_json::Map::new();
+                m.insert("raw".to_string(), other);
+                m
+            }
+        };
+        obj.insert("pairedUsers".to_string(), serde_json::Value::Object(paired_users));
+        Ok(serde_json::Value::Object(obj))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pairing
+// ---------------------------------------------------------------------------
+
+/// GET /api/pairing/list — openclaw pairing list --channel <ch> --json (per channel)
+///
+/// The CLI now requires `--channel <channel>`.  We read the config to discover
+/// which channels are configured, query each one, and merge the results into a
+/// single `{ "requests": [...] }` envelope the frontend expects.
+async fn pairing_list_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| {
+        // Discover configured channel names from openclaw.json
+        let channel_names = config::read_config_raw()
+            .ok()
+            .flatten()
+            .and_then(|v| v.get("channels").cloned())
+            .and_then(|ch| {
+                if let serde_json::Value::Object(map) = ch {
+                    Some(map.keys().cloned().collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        let mut all_requests = Vec::<serde_json::Value>::new();
+        for name in &channel_names {
+            if let Ok(val) = run_openclaw_json(&format!("pairing list --channel {} --json", name)) {
+                if let Some(arr) = val.get("requests").and_then(|r| r.as_array()) {
+                    for req in arr {
+                        let mut obj = req.clone();
+                        if let serde_json::Value::Object(ref mut m) = obj {
+                            // Inject channel name
+                            m.insert("channel".to_string(), serde_json::Value::String(name.clone()));
+                            // Normalize: map "id" → "senderId" if missing
+                            if !m.contains_key("senderId") {
+                                if let Some(id) = m.get("id").cloned() {
+                                    m.insert("senderId".to_string(), id);
+                                }
+                            }
+                            // Normalize: build "senderName" from meta if missing
+                            if !m.contains_key("senderName") {
+                                if let Some(meta) = m.get("meta").and_then(|v| v.as_object()) {
+                                    let parts: Vec<&str> = [
+                                        meta.get("firstName").and_then(|v| v.as_str()),
+                                        meta.get("lastName").and_then(|v| v.as_str()),
+                                    ].into_iter().flatten().collect();
+                                    let display = if parts.is_empty() {
+                                        meta.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                                    } else {
+                                        let mut s = parts.join(" ");
+                                        if let Some(u) = meta.get("username").and_then(|v| v.as_str()) {
+                                            s.push_str(&format!(" (@{})", u));
+                                        }
+                                        s
+                                    };
+                                    if !display.is_empty() {
+                                        m.insert("senderName".to_string(), serde_json::Value::String(display));
+                                    }
+                                }
+                            }
+                        }
+                        all_requests.push(obj);
+                    }
+                }
+            }
+        }
+        Ok(serde_json::json!({ "requests": all_requests }))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct PairingApproveRequest {
+    code: String,
+    channel: Option<String>,
+}
+
+/// POST /api/pairing/approve — openclaw pairing approve <code>
+async fn pairing_approve_handler(
+    Json(body): Json<PairingApproveRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let code = body.code;
+    let channel = body.channel;
+    let result = tokio::task::spawn_blocking(move || {
+        let cmd = if let Some(ch) = channel {
+            format!("pairing approve --channel {} {}", shell_escape(&ch), shell_escape(&code))
+        } else {
+            format!("pairing approve {}", shell_escape(&code))
+        };
+        let (stdout, stderr, success) = run_openclaw_raw(&cmd);
+        if success {
+            Ok(serde_json::json!({ "ok": true, "output": stdout }))
+        } else {
+            Err(format!("{}{}", stderr, stdout))
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agents management
+// ---------------------------------------------------------------------------
+
+/// GET /api/agents/list — openclaw agents list --json
+async fn agents_list_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| run_openclaw_json("agents list --json"))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct AgentAddRequest {
+    id: String,
+    #[serde(default)]
+    workspace: Option<String>,
+}
+
+/// POST /api/agents/add
+async fn agents_add_handler(
+    Json(body): Json<AgentAddRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut args = format!("agents add --id {}", shell_escape(&body.id));
+    if let Some(ws) = &body.workspace {
+        args.push_str(&format!(" --workspace {}", shell_escape(ws)));
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        let (stdout, stderr, success) = run_openclaw_raw(&args);
+        if success {
+            Ok(serde_json::json!({ "ok": true, "output": stdout }))
+        } else {
+            Err(format!("{}{}", stderr, stdout))
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct AgentDeleteRequest {
+    id: String,
+}
+
+/// POST /api/agents/delete
+async fn agents_delete_handler(
+    Json(body): Json<AgentDeleteRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let id = body.id;
+    let result = tokio::task::spawn_blocking(move || {
+        let (stdout, stderr, success) = run_openclaw_raw(&format!("agents delete {} --yes", shell_escape(&id)));
+        if success {
+            Ok(serde_json::json!({ "ok": true, "output": stdout }))
+        } else {
+            Err(format!("{}{}", stderr, stdout))
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct AgentSetIdentityRequest {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    emoji: Option<String>,
+}
+
+/// POST /api/agents/set-identity
+async fn agents_set_identity_handler(
+    Json(body): Json<AgentSetIdentityRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut args = format!("agents set-identity {}", shell_escape(&body.id));
+    if let Some(name) = &body.name {
+        args.push_str(&format!(" --name {}", shell_escape(name)));
+    }
+    if let Some(emoji) = &body.emoji {
+        args.push_str(&format!(" --emoji {}", shell_escape(emoji)));
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        let (stdout, stderr, success) = run_openclaw_raw(&args);
+        if success {
+            Ok(serde_json::json!({ "ok": true, "output": stdout }))
+        } else {
+            Err(format!("{}{}", stderr, stdout))
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Memory
+// ---------------------------------------------------------------------------
+
+/// GET /api/memory/status — openclaw memory status --json
+async fn memory_status_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| run_openclaw_json("memory status --json"))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugins list & disable
+// ---------------------------------------------------------------------------
+
+/// GET /api/plugins/list — openclaw plugins list --json
+async fn plugins_list_handler() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let result = tokio::task::spawn_blocking(|| run_openclaw_json("plugins list --json"))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+/// POST /api/plugins/disable
+async fn plugins_disable_handler(
+    Json(body): Json<PluginRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let name = body.name;
+    let result = tokio::task::spawn_blocking(move || {
+        let (stdout, stderr, success) = run_openclaw_raw(&format!("plugins disable {}", shell_escape(&name)));
+        if success {
+            Ok(serde_json::json!({ "ok": true, "output": stdout }))
+        } else {
+            Err(format!("{}{}", stderr, stdout))
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
     match result {
         Ok(val) => Ok(Json(val)),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),

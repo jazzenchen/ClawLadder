@@ -23,21 +23,30 @@ fn main() {
     // Init logger first — everything from here on gets logged.
     let logger = Logger::init().expect("Failed to initialize logger");
 
+    tracing::info!("[startup] ClawLadder desktop starting");
+    tracing::info!("[startup] Logger initialized at {}", logger.path().display());
+
     // Start the HTTP server in a background thread (API + in build serves static dist)
     let server_logger = logger.clone();
     std::thread::spawn(move || {
+        tracing::info!("[startup] Spawning HTTP server thread");
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         let dist_dir = clawladder_core::path_utils::find_web_dist();
+        tracing::info!(dist_dir = %dist_dir.display(), "[startup] Web dist directory resolved");
+        tracing::info!("[startup] Starting server on port 3145");
         if let Err(e) = rt.block_on(server::run_server(3145, dist_dir, server_logger)) {
-            tracing::error!("Server failed to start: {}", e);
+            tracing::error!("[startup] Server failed to start: {}", e);
             eprintln!("Server error: {}", e);
         }
     });
 
     // Small delay to let server bind
+    tracing::info!("[startup] Waiting 300ms for server to bind");
     std::thread::sleep(std::time::Duration::from_millis(300));
 
-    tracing::info!("Starting Tauri application");
+    let window_url = main_window_url();
+    tracing::info!(url = %window_url, "[startup] Main window URL");
+    tracing::info!("[startup] Starting Tauri application");
 
     // Run Tauri app (blocks until window closes)
     tauri::Builder::default()
@@ -58,5 +67,5 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 
-    tracing::info!("Application shutting down");
+    tracing::info!("[shutdown] Application shutting down");
 }

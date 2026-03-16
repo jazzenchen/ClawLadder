@@ -74,10 +74,30 @@ fn run_gateway_lifecycle(subcmd: &str) -> Result<String, String> {
     }
 }
 
-/// Extract the first JSON value (object or array) from stdout (skip any banner/warning lines).
+/// Extract the first JSON value (object or array) from stdout (skip any banner/warning/plugin-log lines).
+/// Uses streaming deserializer to tolerate trailing non-JSON text (e.g. `[plugins] ...` logs).
 fn extract_json(stdout: &str) -> Option<serde_json::Value> {
-    let start = stdout.find('{').or_else(|| stdout.find('['))?;
-    serde_json::from_str(&stdout[start..]).ok()
+    let start = stdout.find('{').or_else(|| {
+        let mut search_from = 0;
+        while let Some(pos) = stdout[search_from..].find('[') {
+            let abs = search_from + pos;
+            let after = stdout[abs + 1..].trim_start();
+            if after.starts_with('{')
+                || after.starts_with(']')
+                || after.starts_with('"')
+                || after.starts_with("true")
+                || after.starts_with("false")
+                || after.starts_with("null")
+                || after.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+            {
+                return Some(abs);
+            }
+            search_from = abs + 1;
+        }
+        None
+    })?;
+    let mut de = serde_json::Deserializer::from_str(&stdout[start..]);
+    serde_json::Value::deserialize(&mut de).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +231,53 @@ pub fn gateway_restart() -> Result<String, String> {
 /// `openclaw gateway uninstall`
 pub fn gateway_uninstall() -> Result<String, String> {
     run_gateway_lifecycle("uninstall")
+}
+
+/// Auto-approve all pending device pairing requests.
+///
+/// Reads `openclaw devices list --json`, counts pending requests, and approves
+/// each one via `openclaw devices approve --latest`.  This is called on
+/// ClawLadder startup and after gateway start/restart so the local CLI and
+/// Control UI are never blocked by the device-pairing gate.
+pub fn auto_approve_pending_devices() -> usize {
+    tracing::info!("[device-pairing] Running devices list --json");
+    let (stdout, stderr, success) = run_openclaw_cmd("devices list --json");
+    if !success {
+        tracing::warn!(stderr = %stderr, "[device-pairing] devices list command failed");
+    }
+    let json = match extract_json(&stdout) {
+        Some(v) => v,
+        None => {
+            tracing::warn!("[device-pairing] No JSON in devices list output");
+            return 0;
+        }
+    };
+    let pending = match json.get("pending").and_then(|p| p.as_array()) {
+        Some(arr) => arr,
+        _ => {
+            tracing::info!("[device-pairing] No pending array in response");
+            return 0;
+        }
+    };
+    let count = pending.len();
+    if count == 0 {
+        tracing::info!("[device-pairing] No pending device requests");
+        return 0;
+    }
+
+    tracing::info!(count, "[device-pairing] Found pending device requests, approving");
+    let mut approved = 0usize;
+    for i in 0..count {
+        let (out, err, ok) = run_openclaw_cmd("devices approve --latest");
+        if ok {
+            approved += 1;
+            tracing::info!(i, "[device-pairing] Approved request");
+        } else {
+            tracing::warn!(i, stdout = %out, stderr = %err, "[device-pairing] Failed to approve request");
+        }
+    }
+    tracing::info!(approved, total = count, "[device-pairing] Approval complete");
+    approved
 }
 
 /// `openclaw --version`

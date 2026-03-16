@@ -125,7 +125,7 @@ export function InstallingView({ progress, logs, onCancel }: InstallingViewProps
         <div className="flex items-center gap-3">
           <span className="text-2xl">🦞</span>
           <div>
-            <h1 className="text-sm font-medium text-foreground">
+            <h1 className="text-sm  text-foreground">
               正在安装 OpenClaw...
             </h1>
           </div>

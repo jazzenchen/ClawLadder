@@ -1,16 +1,16 @@
 // InstalledView — "installed" phase: OpenClaw installed but not configured
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
-import { CheckCircle2, LayoutDashboard } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import type { StatusInfo } from "@/lib/api";
 
 interface InstalledViewProps {
   statusInfo: StatusInfo | null;
   onConfigure: () => void;
-  onSkipToDashboard: () => void;
+  onBack?: () => void;
 }
 
-export function InstalledView({ statusInfo, onConfigure, onSkipToDashboard }: InstalledViewProps) {
+export function InstalledView({ statusInfo, onConfigure, onBack }: InstalledViewProps) {
   return (
     <div className="h-full w-full flex flex-col items-center justify-center min-h-screen p-8 bg-background page-transition">
       <div className="flex flex-col items-center gap-6 max-w-lg text-center">
@@ -48,7 +48,7 @@ export function InstalledView({ statusInfo, onConfigure, onSkipToDashboard }: In
               <>
                 检测到 OpenClaw 已安装但尚未完成配置。
                 <br />
-                需要配置 <span className="text-foreground font-medium">AI 模型</span> 和 <span className="text-foreground font-medium">通讯工具</span> 才能正常使用。
+                需要配置 <span className="text-foreground ">AI 模型</span> 和 <span className="text-foreground ">通讯工具</span> 才能正常使用。
               </>
             )}
           </p>
@@ -61,18 +61,19 @@ export function InstalledView({ statusInfo, onConfigure, onSkipToDashboard }: In
             onClick={onConfigure}
             className="install-btn gap-2 px-5 h-9 bg-primary hover:bg-primary/90 text-primary-foreground"
           >
-            继续配置
+            {statusInfo?.configured ? "开始配置" : "继续配置"}
             <ArrowRight className="w-3.5 h-3.5" />
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onSkipToDashboard}
-            className="gap-2 px-5 h-9 border-border/50 hover:bg-muted/50"
-          >
-            <LayoutDashboard className="w-3.5 h-3.5" />
-            跳过，进入控制面板
-          </Button>
+          {onBack && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onBack}
+              className="gap-2 px-5 h-9"
+            >
+              返回 Dashboard
+            </Button>
+          )}
         </div>
       </div>
     </div>

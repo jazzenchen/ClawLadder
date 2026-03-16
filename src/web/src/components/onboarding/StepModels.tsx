@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Badge } from "../ui/badge";
+import { Card } from "../ui/card";
 import {
   Select,
   SelectContent,
@@ -13,6 +14,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { ScrollArea } from "../ui/scroll-area";
+import { Pencil, Trash2, Star, Key, Cpu, Plus, X } from "lucide-react";
 
 import {
   fetchProviders,
@@ -80,7 +82,7 @@ function ModelSelector({
   value,
   placeholder,
   onChange,
-  label = "Model ID",
+  label = "Model ID（模型 ID）",
 }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -106,7 +108,7 @@ function ModelSelector({
           <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30">
             <input
               ref={inputRef}
-              className="flex-1 h-8 px-2.5 text-base md:text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+              className="flex-1 h-8 px-2.5 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
               placeholder={placeholder}
               value={value}
               onChange={(e) => onChange(e.target.value)}
@@ -125,7 +127,7 @@ function ModelSelector({
         <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30">
           <input
             ref={inputRef}
-            className="flex-1 h-8 px-2.5 text-base md:text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+            className="flex-1 h-8 px-2.5 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
             placeholder={placeholder}
             value={value}
             onChange={(e) => {
@@ -162,7 +164,7 @@ function ModelSelector({
             {filtered.map((m) => (
               <div
                 key={m.id}
-                className={`flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground ${m.id === value ? "bg-accent/50" : ""}`}
+                className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-accent hover:text-accent-foreground ${m.id === value ? "bg-accent/50" : ""}`}
                 onClick={() => {
                   onChange(m.id);
                   setOpen(false);
@@ -282,7 +284,7 @@ export function StepModels({ onNext, onExit }: Props) {
       ...value,
       providers: currentProviders,
       defaultProvider: providerId,
-      defaultModel: entry?.selectedModel ?? "",
+      defaultModel: entry?.selectedModel ? `${providerId}/${entry.selectedModel}` : "",
     });
   };
 
@@ -476,7 +478,7 @@ export function StepModels({ onNext, onExit }: Props) {
   };
 
   // Is current selection a custom provider?
-  const isCustom = value.defaultProvider.startsWith("custom-");
+  const isCustom = !selectedMeta;
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -489,6 +491,64 @@ export function StepModels({ onNext, onExit }: Props) {
 
       <ScrollArea className="flex-1 min-h-0 overflow-hidden">
         <div className="flex flex-col gap-5 pb-4 px-4">
+          {/* ── Configured providers pill bar ──────────────────────────── */}
+          {providers.filter((p) => p.enabled && (p.apiKey || p.authenticated)).length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pb-4">
+              {providers.map((p, idx) => {
+                if (!p.enabled || (!p.apiKey && !p.authenticated)) return null;
+                const meta = getProviderMeta(p.id);
+                const isActive = value.defaultProvider === p.id;
+                const isDefault = value.defaultModel?.startsWith(p.id + "/");
+                const pillLabel = meta?.label ?? p.label ?? p.id;
+                return (
+                  <div
+                    key={p.id}
+                    className={`inline-flex items-center gap-1 h-7 pl-1 pr-1 rounded-full text-xs cursor-pointer border transition-colors ${
+                      isActive
+                        ? "bg-primary/15 border-primary/40 text-primary"
+                        : "bg-muted/50 border-border hover:bg-muted"
+                    }`}
+                    onClick={() => onChange({ ...value, defaultProvider: p.id })}
+                  >
+                    <button
+                      className={`p-0.5 rounded-full ${isDefault ? "text-primary" : "text-muted-foreground hover:text-primary hover:bg-primary/20"}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onChange({
+                          ...value,
+                          defaultProvider: p.id,
+                          defaultModel: p.selectedModel ? `${p.id}/${p.selectedModel}` : "",
+                        });
+                      }}
+                      title="设为默认"
+                    >
+                      <Star className={`w-3 h-3 ${isDefault ? "fill-current" : ""}`} />
+                    </button>
+                    <span className="max-w-[100px] truncate">{pillLabel}</span>
+                    <button
+                      className="p-0.5 rounded-full hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeCustomProvider(idx);
+                      }}
+                      title="删除"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                );
+              })}
+              <button
+                className="inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-xs border border-dashed border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
+                onClick={addCustomProvider}
+                title="新增"
+              >
+                <Plus className="w-3 h-3" />
+                新增
+              </button>
+            </div>
+          )}
+
           {/* ── Provider Selector (searchable dropdown) ──────────────────── */}
           <div className="flex flex-col gap-2">
             <Label>服务商 (Provider)</Label>
@@ -496,7 +556,7 @@ export function StepModels({ onNext, onExit }: Props) {
               <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30 cursor-pointer">
                 <input
                   ref={inputRef}
-                  className="flex-1 h-8 px-2.5 text-base md:text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+                  className="flex-1 h-8 px-2.5 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
                   placeholder="搜索或选择服务商…"
                   value={dropdownOpen ? searchQuery : getDisplayLabel()}
                   onChange={(e) => {
@@ -536,7 +596,7 @@ export function StepModels({ onNext, onExit }: Props) {
               {dropdownOpen && (
                 <div className="absolute z-50 mt-1 w-full max-h-96 overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-md">
                   {filteredCategories.length === 0 ? (
-                    <div className="py-3 text-center text-sm text-muted-foreground">
+                    <div className="py-3 text-center text-xs text-muted-foreground">
                       无匹配结果
                     </div>
                   ) : (
@@ -556,7 +616,7 @@ export function StepModels({ onNext, onExit }: Props) {
                           return (
                             <div
                               key={g.groupId}
-                              className={`flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground ${
+                              className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-accent hover:text-accent-foreground ${
                                 isSelected ? "bg-accent/50" : ""
                               }`}
                               onClick={() => {
@@ -608,7 +668,7 @@ export function StepModels({ onNext, onExit }: Props) {
           {/* ── Selected Provider Config (built-in) ────────────────────── */}
           {selectedMeta && selectedEntry && selectedIdx >= 0 && !isCustom && (
             <div className="flex flex-col gap-4 border-t border-border pt-4">
-              <div className="text-sm flex items-center gap-2 font-medium">
+              <div className="text-sm flex items-center gap-2 ">
                 {selectedGroup && selectedGroup.variants.length > 1
                   ? selectedGroup.label
                   : selectedMeta.label}
@@ -651,7 +711,7 @@ export function StepModels({ onNext, onExit }: Props) {
                             )}
                           </div>
                           <div className="flex-1 min-w-0 overflow-hidden">
-                            <div className="text-sm font-medium truncate">
+                            <div className="text-sm  truncate">
                               {variant.variantLabel ?? variant.label}
                             </div>
                             {variant.oauthNote && (
@@ -709,7 +769,7 @@ export function StepModels({ onNext, onExit }: Props) {
               {selectedEntry.authMode === "apiKey" && (
                 <div className="flex flex-col gap-1.5">
                   <Label className="text-xs">
-                    API Key
+                    API Key（密钥）
                     {selectedMeta.envKey && (
                       <span className="text-muted-foreground ml-1">
                         ({selectedMeta.envKey})
@@ -730,7 +790,7 @@ export function StepModels({ onNext, onExit }: Props) {
               {/* Setup Token */}
               {selectedEntry.authMode === "setup-token" && (
                 <div className="flex flex-col gap-1.5">
-                  <Label className="text-xs">Setup Token</Label>
+                  <Label className="text-xs">Setup Token（设置令牌）</Label>
                   <div className="flex gap-2">
                     <Input
                       type="password"
@@ -817,7 +877,7 @@ export function StepModels({ onNext, onExit }: Props) {
               {selectedMeta.baseUrl &&
                 !["amazon-bedrock"].includes(selectedEntry.id) && (
                   <div className="flex flex-col gap-1.5">
-                    <Label className="text-xs">Base URL</Label>
+                    <Label className="text-xs">Base URL（接口地址）</Label>
                     <Input
                       placeholder={selectedMeta.baseUrl}
                       value={selectedEntry.baseUrl}
@@ -836,7 +896,7 @@ export function StepModels({ onNext, onExit }: Props) {
               {/* Model Selector */}
               <ModelSelector
                 models={selectedCatalogModels}
-                value={selectedEntry.selectedModel || value.defaultModel}
+                value={selectedEntry.selectedModel || (value.defaultModel?.includes("/") ? value.defaultModel.split("/").slice(1).join("/") : value.defaultModel)}
                 placeholder={selectedMeta.exampleModel || "model-id"}
                 onChange={(val) => {
                   const next = [...providers];
@@ -844,7 +904,7 @@ export function StepModels({ onNext, onExit }: Props) {
                     ...next[selectedIdx],
                     selectedModel: val,
                   };
-                  onChange({ ...value, providers: next, defaultModel: val });
+                  onChange({ ...value, providers: next, defaultModel: `${value.defaultProvider}/${val}` });
                 }}
               />
 
@@ -860,25 +920,15 @@ export function StepModels({ onNext, onExit }: Props) {
           )}
 
           {/* ── Custom Provider Config ────────────────────────────────────── */}
-          {value.defaultProvider.startsWith("custom-") &&
+          {isCustom &&
             selectedEntry &&
             selectedIdx >= 0 && (
               <div className="flex flex-col gap-4 border-t border-border pt-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">自定义 Provider</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-destructive text-xs h-7"
-                    onClick={() => removeCustomProvider(selectedIdx)}
-                  >
-                    删除
-                  </Button>
-                </div>
+                <span className="text-sm ">自定义 Provider</span>
                 <div className="flex flex-col gap-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">Provider Key</Label>
+                      <Label className="text-xs">Provider Key（服务商标识）</Label>
                       <Input
                         placeholder="my-provider"
                         value={selectedEntry.customKey ?? ""}
@@ -911,7 +961,7 @@ export function StepModels({ onNext, onExit }: Props) {
                     </div>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <Label className="text-xs">Base URL</Label>
+                    <Label className="text-xs">Base URL（接口地址）</Label>
                     <Input
                       placeholder="https://api.example.com/v1"
                       value={selectedEntry.baseUrl}
@@ -921,7 +971,7 @@ export function StepModels({ onNext, onExit }: Props) {
                     />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <Label className="text-xs">API Key</Label>
+                    <Label className="text-xs">API Key（密钥）</Label>
                     <Input
                       type="password"
                       placeholder="sk-..."
@@ -936,7 +986,7 @@ export function StepModels({ onNext, onExit }: Props) {
                     models={[]}
                     value={selectedEntry.selectedModel}
                     placeholder="gpt-4o / claude-sonnet-4 / ..."
-                    label="Model ID"
+                    label="Model ID（模型 ID）"
                     onChange={(val) => {
                       const next = [...providers];
                       next[selectedIdx] = {
@@ -946,12 +996,12 @@ export function StepModels({ onNext, onExit }: Props) {
                       onChange({
                         ...value,
                         providers: next,
-                        defaultModel: val,
+                        defaultModel: `${value.defaultProvider}/${val}`,
                       });
                     }}
                   />
                   <div className="flex flex-col gap-1.5">
-                    <Label className="text-xs">Model Name（可选）</Label>
+                    <Label className="text-xs">Model Name（模型显示名称，可选）</Label>
                     <Input
                       placeholder="显示名称，如 GPT-4o"
                       value={selectedEntry.customModelName ?? ""}
@@ -974,7 +1024,7 @@ export function StepModels({ onNext, onExit }: Props) {
             退出
           </Button>
         ) : <div />}
-        <Button onClick={onNext} disabled={!canProceed}>
+        <Button onClick={onNext}>
           下一步 →
         </Button>
       </div>

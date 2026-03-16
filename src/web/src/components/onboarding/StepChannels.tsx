@@ -24,15 +24,11 @@ export interface FeishuConfig {
   appSecret: string;
   connectionMode: "websocket" | "webhook";
   domain: "feishu" | "lark";
-  groupPolicy: "open" | "mention" | "off";
-  dmPolicy: "open" | "off";
 }
 
 export interface TelegramConfig {
   enabled: boolean;
   botToken: string;
-  groupPolicy: "open" | "mention" | "off";
-  dmPolicy: "open" | "off";
 }
 
 export interface ChannelsConfig {
@@ -47,14 +43,10 @@ export const defaultChannelsConfig: ChannelsConfig = {
     appSecret: "",
     connectionMode: "websocket",
     domain: "feishu",
-    groupPolicy: "open",
-    dmPolicy: "open",
   },
   telegram: {
     enabled: false,
     botToken: "",
-    groupPolicy: "open",
-    dmPolicy: "open",
   },
 };
 
@@ -124,7 +116,7 @@ export function StepChannels({ onNext, onBack }: Props) {
                 <CardContent className="flex flex-col gap-3 pt-0">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">App ID</Label>
+                      <Label className="text-xs">App ID（应用 ID）</Label>
                       <Input
                         placeholder="cli_xxxxxxxx"
                         value={feishu.appId}
@@ -134,7 +126,7 @@ export function StepChannels({ onNext, onBack }: Props) {
                       />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">App Secret</Label>
+                      <Label className="text-xs">App Secret（应用密钥）</Label>
                       <Input
                         type="password"
                         placeholder="xxxxxxxxxxxxxxxx"
@@ -187,48 +179,10 @@ export function StepChannels({ onNext, onBack }: Props) {
                       </Select>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">群聊策略</Label>
-                      <Select
-                        value={feishu.groupPolicy}
-                        onValueChange={(v) =>
-                          updateFeishu({
-                            groupPolicy: v as "open" | "mention" | "off",
-                          })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="open">开放 (所有消息)</SelectItem>
-                          <SelectItem value="mention">仅 @提及</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">私聊策略</Label>
-                      <Select
-                        value={feishu.dmPolicy}
-                        onValueChange={(v) =>
-                          updateFeishu({ dmPolicy: v as "open" | "off" })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="open">开放</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
                   <p className="text-xs text-muted-foreground">
                     需要在飞书开放平台创建应用并开启{" "}
                     <code>contact:contact.base:readonly</code> 权限。
+                    保存后将自动启用配对模式，新用户需发送 <code>/pair</code> 验证。
                   </p>
                 </CardContent>
               )}
@@ -259,7 +213,7 @@ export function StepChannels({ onNext, onBack }: Props) {
               {telegram.enabled && (
                 <CardContent className="flex flex-col gap-3 pt-0">
                   <div className="flex flex-col gap-1.5">
-                    <Label className="text-xs">Bot Token</Label>
+                    <Label className="text-xs">Bot Token（机器人令牌）</Label>
                     <Input
                       type="password"
                       placeholder="123456:ABC-DEF..."
@@ -269,47 +223,9 @@ export function StepChannels({ onNext, onBack }: Props) {
                       }
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">群聊策略</Label>
-                      <Select
-                        value={telegram.groupPolicy}
-                        onValueChange={(v) =>
-                          updateTelegram({
-                            groupPolicy: v as "open" | "mention" | "off",
-                          })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="open">开放</SelectItem>
-                          <SelectItem value="mention">仅 @提及</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-xs">私聊策略</Label>
-                      <Select
-                        value={telegram.dmPolicy}
-                        onValueChange={(v) =>
-                          updateTelegram({ dmPolicy: v as "open" | "off" })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="open">开放</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
                   <p className="text-xs text-muted-foreground">
                     通过 @BotFather 创建 Bot 并获取 Token。
+                    保存后将自动启用配对模式，新用户需发送 <code>/pair</code> 验证。
                   </p>
                 </CardContent>
               )}
@@ -322,16 +238,9 @@ export function StepChannels({ onNext, onBack }: Props) {
         <Button variant="outline" onClick={onBack}>
           ← 上一步
         </Button>
-        <div className="flex gap-2">
-          {!hasAnyChannel && (
-            <Button variant="ghost" onClick={onNext}>
-              跳过
-            </Button>
-          )}
-          <Button onClick={onNext} disabled={false}>
-            下一步 →
-          </Button>
-        </div>
+        <Button onClick={onNext}>
+          下一步 →
+        </Button>
       </div>
     </div>
   );
