@@ -5,7 +5,6 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Badge } from "../ui/badge";
-import { Card } from "../ui/card";
 import {
   Select,
   SelectContent,
@@ -14,27 +13,24 @@ import {
   SelectValue,
 } from "../ui/select";
 import { ScrollArea } from "../ui/scroll-area";
-import { Pencil, Trash2, Star, Key, Cpu, Plus, X } from "lucide-react";
+import { Star, Plus, X } from "lucide-react";
 
 import {
   fetchProviders,
   modelsAuthLogin,
+  modelsAuthLoginPty,
   pluginsEnable,
   type CatalogProvider,
 } from "../../lib/api";
 
 import { useOnboardingStore } from "../../stores/onboarding";
-import { useClickOutside } from "../../hooks/useClickOutside";
 
 import {
-  PROVIDER_META,
-  PROVIDER_GROUPS,
   STATIC_PROVIDERS,
   API_TYPES,
   getProviderMeta,
   getProviderGroup,
-  type ProviderMeta,
-  type ProviderGroup,
+  getAuthMethods,
 } from "./providerMeta";
 
 // ── Exported state shape ───────────────────────────────────────────────────
@@ -67,129 +63,9 @@ export interface ModelsConfig {
   defaultModel: string;
 }
 
-// ── Reusable searchable model selector ──────────────────────────────────────
-
-interface ModelSelectorProps {
-  models: { id: string; name?: string }[];
-  value: string;
-  placeholder: string;
-  onChange: (val: string) => void;
-  label?: string;
-}
-
-function ModelSelector({
-  models,
-  value,
-  placeholder,
-  onChange,
-  label = "Model ID（模型 ID）",
-}: ModelSelectorProps) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const closeDropdown = useCallback(() => setOpen(false), []);
-  useClickOutside(ref, closeDropdown);
-
-  // Filter suggestions based on current input value
-  const filtered = models.filter(
-    (m) =>
-      !value ||
-      (m.name || m.id).toLowerCase().includes(value.toLowerCase()) ||
-      m.id.toLowerCase().includes(value.toLowerCase()),
-  );
-
-  // No catalog models → plain input, no suggestions
-  if (models.length === 0) {
-    return (
-      <div className="flex flex-col gap-1.5">
-        <Label className="text-xs">{label}</Label>
-        <div className="relative" ref={ref}>
-          <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30">
-            <input
-              ref={inputRef}
-              className="flex-1 h-8 px-2.5 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
-              placeholder={placeholder}
-              value={value}
-              onChange={(e) => onChange(e.target.value)}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Autocomplete input: user can type freely, suggestions appear below
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Label className="text-xs">{label}</Label>
-      <div className="relative" ref={ref}>
-        <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30">
-          <input
-            ref={inputRef}
-            className="flex-1 h-8 px-2.5 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
-            placeholder={placeholder}
-            value={value}
-            onChange={(e) => {
-              onChange(e.target.value);
-              if (!open) setOpen(true);
-            }}
-            onFocus={() => {
-              if (!open) setOpen(true);
-            }}
-          />
-          {models.length > 0 && (
-            <span
-              className="pr-3 text-muted-foreground cursor-pointer select-none"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setOpen((v) => !v);
-                inputRef.current?.focus();
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path
-                  d="M3 4.5L6 7.5L9 4.5"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </span>
-          )}
-        </div>
-        {open && filtered.length > 0 && (
-          <div className="absolute z-50 mt-1 w-full max-h-96 overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-md">
-            {filtered.map((m) => (
-              <div
-                key={m.id}
-                className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-accent hover:text-accent-foreground ${m.id === value ? "bg-accent/50" : ""}`}
-                onClick={() => {
-                  onChange(m.id);
-                  setOpen(false);
-                }}
-              >
-                <span className="flex-1 truncate">{m.name || m.id}</span>
-                {m.id === value && (
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path
-                      d="M3 7L6 10L11 4"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+// Re-export shared ModelAutocomplete as ModelSelector for backward compat
+import { ModelAutocomplete as ModelSelector } from "../models/ModelAutocomplete";
+import { ProviderSearchDropdown } from "../models/ProviderSearchDropdown";
 
 // ── Props ──────────────────────────────────────────────────────────────────
 
@@ -207,6 +83,7 @@ export function StepModels({ onNext, onExit }: Props) {
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState<string | null>(null);
   const [authMsg, setAuthMsg] = useState("");
+  const [selectedAuthMethod, setSelectedAuthMethod] = useState<string>("");
 
   useEffect(() => {
     fetchProviders()
@@ -286,6 +163,10 @@ export function StepModels({ onNext, onExit }: Props) {
       defaultProvider: providerId,
       defaultModel: entry?.selectedModel ? `${providerId}/${entry.selectedModel}` : "",
     });
+    // Reset auth method selection for the new provider
+    const meta = getProviderMeta(providerId);
+    const methods = meta ? getAuthMethods(meta) : [];
+    setSelectedAuthMethod(methods[0]?.id ?? "");
   };
 
   // Currently selected provider
@@ -298,6 +179,7 @@ export function StepModels({ onNext, onExit }: Props) {
   const selectedGroup = getProviderGroup(value.defaultProvider);
 
   // OAuth / plugin login
+  const oauthAbortRef = useRef<(() => void) | null>(null);
   const handleOAuthLogin = async (providerId: string) => {
     const meta = getProviderMeta(providerId);
     setAuthLoading(providerId);
@@ -314,11 +196,18 @@ export function StepModels({ onNext, onExit }: Props) {
           );
         }
       }
-      // Pure OAuth login — don't pass auth_choice so the backend uses
-      // `models auth login` (which intercepts the URL and opens a browser).
-      const res = await modelsAuthLogin({
-        provider: providerId,
-      });
+      // PTY-based OAuth login — server opens browser, we wait via WebSocket
+      const methods = meta ? getAuthMethods(meta) : [];
+      const method = selectedAuthMethod || methods[0]?.id || "";
+      const { promise, abort } = modelsAuthLoginPty(
+        { provider: providerId, auth_method: method },
+        (text) => {
+          console.log("[auth pty]", text);
+        },
+      );
+      oauthAbortRef.current = abort;
+      const res = await promise;
+      oauthAbortRef.current = null;
       if (res.ok) {
         const idx = providers.findIndex((p) => p.id === providerId);
         if (idx >= 0) updateProvider(idx, { authenticated: true });
@@ -400,62 +289,7 @@ export function StepModels({ onNext, onExit }: Props) {
       );
     });
 
-  // Group providers for the dropdown — use merged PROVIDER_GROUPS
-  const CUSTOM_GROUP: ProviderGroup = {
-    groupId: "__custom__",
-    label: "+ 自定义 Provider",
-    category: "other",
-    variants: [],
-  };
-
-  const dropdownCategories = [
-    {
-      label: "热门",
-      items: PROVIDER_GROUPS.filter((g) => g.category === "popular"),
-    },
-    {
-      label: "云服务",
-      items: PROVIDER_GROUPS.filter((g) => g.category === "cloud"),
-    },
-    {
-      label: "本地",
-      items: PROVIDER_GROUPS.filter((g) => g.category === "local"),
-    },
-    {
-      label: "其他",
-      items: [
-        ...PROVIDER_GROUPS.filter((g) => g.category === "other"),
-        CUSTOM_GROUP,
-      ],
-    },
-  ];
-
-  // Searchable dropdown state
-  const [searchQuery, setSearchQuery] = useState("");
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Close dropdown on outside click
-  const closeProviderDropdown = useCallback(() => setDropdownOpen(false), []);
-  useClickOutside(dropdownRef, closeProviderDropdown);
-
-  // Filter groups by search query (search across group label + all variant labels/ids)
-  const filteredCategories = dropdownCategories
-    .map((cat) => ({
-      ...cat,
-      items: cat.items.filter((g) => {
-        if (!searchQuery) return true;
-        const q = searchQuery.toLowerCase();
-        if (g.label.toLowerCase().includes(q)) return true;
-        if (g.groupId.toLowerCase().includes(q)) return true;
-        return g.variants.some(
-          (v) =>
-            v.label.toLowerCase().includes(q) || v.id.toLowerCase().includes(q),
-        );
-      }),
-    }))
-    .filter((cat) => cat.items.length > 0);
+  // (provider dropdown categories + search are now handled by ProviderSearchDropdown)
 
   // Get display label for current selection — show group label if grouped
   const getDisplayLabel = () => {
@@ -550,120 +384,13 @@ export function StepModels({ onNext, onExit }: Props) {
           )}
 
           {/* ── Provider Selector (searchable dropdown) ──────────────────── */}
-          <div className="flex flex-col gap-2">
-            <Label>服务商 (Provider)</Label>
-            <div className="relative" ref={dropdownRef}>
-              <div className="flex items-center border border-input rounded-lg bg-transparent dark:bg-input/30 cursor-pointer">
-                <input
-                  ref={inputRef}
-                  className="flex-1 h-8 px-2.5 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
-                  placeholder="搜索或选择服务商…"
-                  value={dropdownOpen ? searchQuery : getDisplayLabel()}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    if (!dropdownOpen) setDropdownOpen(true);
-                  }}
-                  onFocus={() => {
-                    if (!dropdownOpen) {
-                      setSearchQuery("");
-                      setDropdownOpen(true);
-                    }
-                  }}
-                />
-                <span
-                  className="pr-3 text-muted-foreground cursor-pointer select-none"
-                  onMouseDown={(e) => {
-                    e.preventDefault(); // prevent input blur
-                    setDropdownOpen((v) => !v);
-                    if (!dropdownOpen) {
-                      setSearchQuery("");
-                      inputRef.current?.focus();
-                    }
-                  }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path
-                      d="M3 4.5L6 7.5L9 4.5"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-              </div>
-
-              {dropdownOpen && (
-                <div className="absolute z-50 mt-1 w-full max-h-96 overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-md">
-                  {filteredCategories.length === 0 ? (
-                    <div className="py-3 text-center text-xs text-muted-foreground">
-                      无匹配结果
-                    </div>
-                  ) : (
-                    filteredCategories.map((cat) => (
-                      <div key={cat.label}>
-                        <div className="px-3 py-1.5 text-xs text-muted-foreground sticky top-0 bg-popover">
-                          {cat.label}
-                        </div>
-                        {cat.items.map((g) => {
-                          // Check if any variant in this group is currently selected
-                          const isSelected =
-                            g.groupId === "__custom__"
-                              ? isCustom
-                              : g.variants.some(
-                                  (v) => v.id === value.defaultProvider,
-                                );
-                          return (
-                            <div
-                              key={g.groupId}
-                              className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-accent hover:text-accent-foreground ${
-                                isSelected ? "bg-accent/50" : ""
-                              }`}
-                              onClick={() => {
-                                if (g.groupId === "__custom__") {
-                                  addCustomProvider();
-                                } else {
-                                  // Select the first variant by default
-                                  handleSelectProvider(g.variants[0].id);
-                                }
-                                setDropdownOpen(false);
-                                setSearchQuery("");
-                              }}
-                            >
-                              <span className="flex-1">
-                                {g.label}
-                                {g.variants.length > 1 && (
-                                  <span className="text-xs text-muted-foreground ml-1.5">
-                                    ({g.variants.length} 种接入方式)
-                                  </span>
-                                )}
-                              </span>
-                              {isSelected && (
-                                <svg
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 14 14"
-                                  fill="none"
-                                >
-                                  <path
-                                    d="M3 7L6 10L11 4"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                  />
-                                </svg>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
+          <ProviderSearchDropdown
+            value={value.defaultProvider}
+            displayLabel={getDisplayLabel()}
+            onSelect={(id) => handleSelectProvider(id)}
+            onSelectCustom={addCustomProvider}
+            label="服务商 (Provider)"
+          />
 
           {/* ── Selected Provider Config (built-in) ────────────────────── */}
           {selectedMeta && selectedEntry && selectedIdx >= 0 && !isCustom && (
@@ -827,41 +554,78 @@ export function StepModels({ onNext, onExit }: Props) {
 
               {/* OAuth / Plugin OAuth */}
               {(selectedEntry.authMode === "oauth" ||
-                selectedEntry.authMode === "plugin-oauth") && (
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant={
-                        selectedEntry.authenticated ? "outline" : "default"
-                      }
-                      disabled={authLoading === value.defaultProvider}
-                      onClick={() => handleOAuthLogin(value.defaultProvider)}
-                    >
-                      {authLoading === value.defaultProvider
-                        ? "等待浏览器登录…"
-                        : selectedEntry.authenticated
-                          ? "✓ 已认证 (重新登录)"
-                          : "🔐 登录"}
-                    </Button>
-                    {selectedEntry.authenticated && (
-                      <Badge variant="secondary" className="text-xs">
-                        已认证
-                      </Badge>
+                selectedEntry.authMode === "plugin-oauth") && (() => {
+                const methods = selectedMeta ? getAuthMethods(selectedMeta) : [];
+                const showMethodSelector = methods.length > 1;
+                return (
+                  <div className="flex flex-col gap-2">
+                    {showMethodSelector && (
+                      <div className="flex flex-col gap-1.5">
+                        <Label className="text-xs">登录方式</Label>
+                        <Select
+                          value={selectedAuthMethod || methods[0]?.id || ""}
+                          onValueChange={(v) => v && setSelectedAuthMethod(v)}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue>
+                              {methods.find((m) => m.id === (selectedAuthMethod || methods[0]?.id))?.label ?? "选择"}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {methods.map((m) => (
+                              <SelectItem key={m.id} value={m.id}>
+                                {m.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     )}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant={
+                          selectedEntry.authenticated ? "outline" : "default"
+                        }
+                        disabled={authLoading === value.defaultProvider}
+                        onClick={() => handleOAuthLogin(value.defaultProvider)}
+                        className="shrink-0"
+                      >
+                        {authLoading === value.defaultProvider
+                          ? "等待中…"
+                          : selectedEntry.authenticated
+                            ? "重新登录"
+                            : "🔐 登录"}
+                      </Button>
+                      {authLoading === value.defaultProvider && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="shrink-0"
+                          onClick={() => {
+                            oauthAbortRef.current?.();
+                            oauthAbortRef.current = null;
+                            setAuthLoading(null);
+                            setAuthMsg("已取消");
+                          }}
+                        >
+                          取消
+                        </Button>
+                      )}
+                      {selectedEntry.authenticated && (
+                        <Badge variant="secondary" className="text-xs shrink-0">
+                          ✓ 已认证
+                        </Badge>
+                      )}
+                      {!authLoading && !selectedEntry.authenticated && (
+                        <span className="text-xs text-muted-foreground truncate">
+                          {selectedMeta.oauthNote || "打开浏览器完成 OAuth"}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    {selectedMeta.pluginName
-                      ? `将启用 ${selectedMeta.pluginName} 插件并打开浏览器登录`
-                      : "点击后将打开系统浏览器完成 OAuth 登录"}
-                  </p>
-                  {selectedMeta.oauthNote && (
-                    <p className="text-xs text-yellow-500">
-                      {selectedMeta.oauthNote}
-                    </p>
-                  )}
-                </div>
-              )}
+                );
+              })()}
 
               {/* AWS SDK / ADC */}
               {selectedEntry.authMode === "aws-sdk" && (
