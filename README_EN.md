@@ -11,6 +11,7 @@ Full GUI experience — no terminal required.
 ## Features
 
 - **One-click install** — Automatically handles Xcode CLT, Node.js, Git and other dependencies, with China mirror support
+- **Version pinning** — Installs a fixed version of OpenClaw (currently pinned to `2026.3.13`) to avoid upstream breaking changes
 - **CLI-native** — Deeply integrated with the OpenClaw CLI; no manual config file editing
 - **IM integration** — Guided setup for Feishu / Telegram bots, no fiddling with pairing codes
 - **Curated Skills** — Community-vetted Skills, install with a checkbox

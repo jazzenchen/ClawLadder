@@ -43,6 +43,7 @@ function apiPost<T>(url: string, body?: unknown, errorMsg?: string): Promise<T> 
 export interface StatusInfo {
   installed: boolean;
   version?: string;
+  pinnedVersion?: string;
   configured: boolean;
   running: boolean;
 }

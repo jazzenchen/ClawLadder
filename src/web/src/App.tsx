@@ -203,6 +203,7 @@ export default function App() {
         <Dashboard
           installed={true}
           version={statusInfo?.version}
+          pinnedVersion={statusInfo?.pinnedVersion}
           onResetConfig={() => setPhase("installed")}
           deviceInfo={deviceInfo}
         />

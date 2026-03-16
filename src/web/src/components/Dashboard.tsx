@@ -77,6 +77,7 @@ import { DeviceDialog } from "@/components/DeviceDialog";
 interface DashboardProps {
   installed: boolean;
   version?: string;
+  pinnedVersion?: string;
   onResetConfig: () => void;
   deviceInfo?: DeviceInfo | null;
 }
@@ -224,7 +225,7 @@ function ActionButton({
 // Dashboard
 // ---------------------------------------------------------------------------
 
-export function Dashboard({ installed, version, onResetConfig, deviceInfo }: DashboardProps) {
+export function Dashboard({ installed, version, pinnedVersion, onResetConfig, deviceInfo }: DashboardProps) {
   const [gwStatus, setGwStatus] = useState<GatewayStatus | null>(null);
   const [gwUrl, setGwUrl] = useState<GatewayUrl | null>(null);
   const [ocStatus, setOcStatus] = useState<OpenClawStatus | null>(null);
@@ -355,6 +356,14 @@ export function Dashboard({ installed, version, onResetConfig, deviceInfo }: Das
               {version && (
                 <p className="text-[11px] text-muted-foreground font-mono mt-0.5">
                   {versionNum}{commitHash ? ` (${commitHash})` : ""}
+                  {pinnedVersion && (
+                    <span className="ml-2 text-muted-foreground/60">
+                      · 锁定版本 {pinnedVersion}
+                      {versionNum && versionNum !== pinnedVersion && (
+                        <span className="text-amber-500 ml-1">⚠ 版本不一致</span>
+                      )}
+                    </span>
+                  )}
                 </p>
               )}
             </div>

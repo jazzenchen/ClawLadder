@@ -18,6 +18,9 @@ use serde::Deserialize;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Pinned OpenClaw version — update this single constant when upgrading.
+const OPENCLAW_PINNED_VERSION: &str = "2026.3.13";
 use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
 
@@ -412,6 +415,7 @@ async fn check_status() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "installed": installed,
         "version": version,
+        "pinnedVersion": OPENCLAW_PINNED_VERSION,
         "configured": configured,
         "running": running,
     }))
@@ -478,8 +482,9 @@ async fn start_install_homebrew(
     let askpass_str = askpass_path.to_string_lossy().to_string();
     let verbose_env = if body.verbose { " OPENCLAW_VERBOSE=1" } else { "" };
     let cmd = format!(
-        "export SUDO_ASKPASS={} NONINTERACTIVE=1 OPENCLAW_VERSION=2026.3.13{} && sudo -A -v && bash {} --no-prompt --npm --no-onboard; OPENCLAW_BIN=\"$(which openclaw 2>/dev/null)\"; echo \"OPENCLAW_BIN=$OPENCLAW_BIN\"; rm -f {}",
+        "export SUDO_ASKPASS={} NONINTERACTIVE=1 OPENCLAW_VERSION={}{} && sudo -A -v && bash {} --no-prompt --npm --no-onboard; OPENCLAW_BIN=\"$(which openclaw 2>/dev/null)\"; echo \"OPENCLAW_BIN=$OPENCLAW_BIN\"; rm -f {}",
         shell_escape(&askpass_str),
+        OPENCLAW_PINNED_VERSION,
         verbose_env,
         shell_escape(&script_str),
         shell_escape(&askpass_str),
@@ -684,7 +689,7 @@ echo "==> npm version: $(npm -v)"
 # Step 4: Install OpenClaw
 # ---------------------------------------------------------------
 echo "==> Installing OpenClaw via npm..."
-npm install -g openclaw@2026.3.13
+npm install -g openclaw@{openclaw_version}
 
 # Ensure npm global bin is in PATH (needed when using system node)
 NPM_GLOBAL_BIN="$(npm prefix -g)/bin"
@@ -724,6 +729,7 @@ add_to_profile "$HOME/.bash_profile"
 echo "==> Done!"
 "##,
         verbose = verbose_flag,
+        openclaw_version = OPENCLAW_PINNED_VERSION,
         node_index_url = node_index_url,
         node_dist_base = node_dist_base,
         npm_mirror = npm_mirror_cmd,
