@@ -317,7 +317,7 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="min-w-2xl max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
+      <DialogContent className="min-w-2xl max-w-4xl max-h-[85vh] overflow-hidden flex flex-col" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Radio className="w-4 h-4" />
@@ -752,11 +752,16 @@ function FeishuEditForm({
           onClick={onSave}
         >
           {saving ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span className="inline-flex items-center gap-1 text-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              保存中…
+            </span>
           ) : (
-            <Save className="w-3.5 h-3.5" />
+            <>
+              <Save className="w-3.5 h-3.5" />
+              保存并重启网关
+            </>
           )}
-          {saving ? "保存中…" : "保存并重启网关"}
         </Button>
         <Button
           variant="ghost"
@@ -832,11 +837,16 @@ function TelegramEditForm({
           onClick={onSave}
         >
           {saving ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span className="inline-flex items-center gap-1 text-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              保存中…
+            </span>
           ) : (
-            <Save className="w-3.5 h-3.5" />
+            <>
+              <Save className="w-3.5 h-3.5" />
+              保存并重启网关
+            </>
           )}
-          {saving ? "保存中…" : "保存并重启网关"}
         </Button>
         <Button
           variant="ghost"

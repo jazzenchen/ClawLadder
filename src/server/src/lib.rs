@@ -1888,144 +1888,213 @@ struct ModelsAuthLoginRequest {
     /// Optional: for onboard --auth-choice flow
     #[serde(default)]
     auth_choice: Option<String>,
+    /// Optional: auth method ID to skip interactive selection (e.g. "oauth", "device")
+    #[serde(default)]
+    auth_method: Option<String>,
 }
 
 /// POST /api/models/auth/login — trigger OAuth or setup-token login
+///
+/// For OAuth flows (needs_browser=true), spawns a PTY session so the CLI
+/// sees a real TTY and outputs the OAuth URL.  Returns `{ session_id }` —
+/// the frontend should connect via WebSocket to monitor progress.
+/// The server-side ghost reader intercepts the first URL and opens the
+/// system browser automatically.
 async fn models_auth_login_handler(
+    State(state): State<AppState>,
     Json(body): Json<ModelsAuthLoginRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let provider = body.provider;
     let setup_token = body.setup_token;
     let auth_choice = body.auth_choice;
+    let auth_method = body.auth_method;
 
     // Only the pure OAuth path (`models auth login`) needs browser URL interception.
     // setup-token and onboard paths are non-interactive — no browser needed.
     let needs_browser = setup_token.is_none() && auth_choice.is_none();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let cmd_args = if let Some(token) = &setup_token {
-            format!(
-                "models auth setup-token --provider {} --token {}",
-                shell_escape(&provider),
-                shell_escape(token)
-            )
-        } else if let Some(choice) = &auth_choice {
-            format!(
-                "onboard --non-interactive --mode local --auth-choice {} --skip-channels --skip-skills --skip-search --skip-health --skip-ui",
-                shell_escape(choice)
-            )
-        } else {
-            format!(
-                "models auth login --provider {} --set-default",
-                shell_escape(&provider)
-            )
-        };
-
+    if needs_browser {
+        // ── PTY-based OAuth flow ──────────────────────────────────────
         let bin = clawladder_core::path_utils::resolve_openclaw_bin();
-        let cmd_str = format!("{} {}", bin, cmd_args);
-        tracing::info!("Auth login command: {} (needs_browser={})", cmd_str, needs_browser);
+        // Set BROWSER=echo so the CLI prints the OAuth URL to stdout
+        // instead of trying to open it directly. Our ghost reader will
+        // intercept the URL and call open::that() on the server side.
+        let method_flag = match &auth_method {
+            Some(m) if !m.is_empty() => format!(" --method {}", shell_escape(m)),
+            _ => String::new(),
+        };
+        let cmd_str = format!(
+            "BROWSER=echo {} models auth login --provider {}{}  --set-default",
+            bin,
+            shell_escape(&provider),
+            method_flag,
+        );
+        tracing::info!("Auth login (PTY): {}", cmd_str);
 
-        if needs_browser {
-            // Stream stdout/stderr so we can intercept the first OAuth URL and open it
-            run_with_browser_intercept(&cmd_str)
-        } else {
-            // Simple blocking execution — no URL interception
+        let (bridge, mut pty_rx, resize_tx) = pty::spawn_pty_cmd(
+            "bash",
+            &["-lc", &cmd_str],
+        )
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to start auth PTY");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start PTY: {}", e))
+        })?;
+
+        let session_id = SessionId::new();
+        tracing::info!(session_id = %session_id, "Auth PTY session created");
+        let buffer = Arc::new(CircularBuffer::new());
+        let (live_tx, _) = broadcast::channel::<Bytes>(LIVE_BROADCAST_CAP);
+
+        // Clone writer before moving bridge into SessionContext
+        let writer_clone = bridge.writer.clone();
+
+        let ctx = SessionContext {
+            bridge,
+            resize_tx,
+            buffer: buffer.clone(),
+            live_tx: live_tx.clone(),
+        };
+        state.registry.insert(session_id, ctx);
+
+        // Ghost reader: PTY output → buffer + broadcast + URL interception
+        // Also auto-confirms interactive prompts (e.g. auth method selection)
+        let registry_clone = state.registry.clone();
+        let logger = state.logger.clone();
+        let sid = session_id;
+        tokio::spawn(async move {
+            let mut accumulated = String::new();
+            let mut url_opened = false;
+            let mut enter_sent = false;
+            while let Some(data) = pty_rx.recv().await {
+                logger.pty(&data);
+                buffer.push(&data);
+                let _ = live_tx.send(Bytes::from(data.clone()));
+
+                // Log PTY output for debugging (skip spinner animation frames)
+                if let Ok(text) = std::str::from_utf8(&data) {
+                    // Strip ANSI escape sequences for analysis
+                    let plain: String = {
+                        let mut out = String::new();
+                        let mut in_esc = false;
+                        for ch in text.chars() {
+                            if ch == '\x1b' { in_esc = true; continue; }
+                            if in_esc {
+                                if ch.is_ascii_alphabetic() || ch == '?' { in_esc = false; }
+                                continue;
+                            }
+                            if !ch.is_control() || ch == '\n' { out.push(ch); }
+                        }
+                        out
+                    };
+                    let trimmed = plain.trim();
+                    // Skip spinner frames (◑◒◐◓) and very short noise
+                    let is_spinner = trimmed.len() < 4
+                        || trimmed.chars().all(|c| "◑◒◐◓◇│─ .…".contains(c) || c.is_whitespace());
+                    if !trimmed.is_empty() && !is_spinner {
+                        let log_line: String = trimmed.chars().take(200).collect();
+                        tracing::info!(session_id = %sid, "[auth pty] {}", log_line);
+                    }
+
+                    // Auto-confirm interactive selection prompts (clack-style ◆ menus)
+                    // as a fallback when --method is not provided.
+                    if !enter_sent && text.contains('◆') && text.contains('●') {
+                        tracing::info!(session_id = %sid, "Auto-confirming interactive prompt");
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        if let Ok(mut w) = writer_clone.lock() {
+                            let _ = w.write_all(b"\r");
+                            let _ = w.flush();
+                        }
+                        enter_sent = true;
+                    }
+                }
+
+                // Intercept OAuth URL from PTY output and open browser
+                if !url_opened {
+                    if let Ok(text) = std::str::from_utf8(&data) {
+                        accumulated.push_str(text);
+                        // Scan accumulated text for URLs line by line
+                        while let Some(nl) = accumulated.find('\n') {
+                            let line = accumulated[..nl].to_string();
+                            accumulated.drain(..=nl);
+                            if let Some(url) = extract_first_url(&line) {
+                                tracing::info!("Opening OAuth URL in browser: {}", url);
+                                if open::that(&url).is_ok() {
+                                    url_opened = true;
+                                }
+                            }
+                        }
+                        // Also check the partial line (URL might not end with \n yet)
+                        if !url_opened {
+                            if let Some(url) = extract_first_url(&accumulated) {
+                                tracing::info!("Opening OAuth URL in browser (partial): {}", url);
+                                if open::that(&url).is_ok() {
+                                    url_opened = true;
+                                }
+                            }
+                        }
+                        // Prevent unbounded growth
+                        if accumulated.len() > 4096 {
+                            let mut drain = accumulated.len() - 2048;
+                            // Ensure we drain at a valid UTF-8 char boundary
+                            while drain < accumulated.len() && !accumulated.is_char_boundary(drain) {
+                                drain += 1;
+                            }
+                            accumulated.drain(..drain);
+                        }
+                    }
+                }
+            }
+            let exit_code = registry_clone
+                .get(&sid)
+                .and_then(|ctx| ctx.bridge.wait_exit_code())
+                .unwrap_or(1);
+            tracing::info!(session_id = %sid, exit_code = exit_code, "Auth PTY closed");
+            let exit_msg = format!("{{\"type\":\"exit\",\"code\":{}}}", exit_code);
+            let _ = live_tx.send(Bytes::from(exit_msg.into_bytes()));
+            let _ = registry_clone.remove(&sid);
+        });
+
+        Ok(Json(serde_json::json!({
+            "ok": true,
+            "needsInteraction": true,
+            "session_id": session_id.to_string(),
+        })))
+    } else {
+        // ── Non-interactive paths (setup-token / onboard) ─────────────
+        let result = tokio::task::spawn_blocking(move || {
+            let cmd_args = if let Some(token) = &setup_token {
+                format!(
+                    "models auth setup-token --provider {} --token {}",
+                    shell_escape(&provider),
+                    shell_escape(token)
+                )
+            } else if let Some(choice) = &auth_choice {
+                format!(
+                    "onboard --non-interactive --mode local --auth-choice {} --skip-channels --skip-skills --skip-search --skip-health --skip-ui",
+                    shell_escape(choice)
+                )
+            } else {
+                unreachable!()
+            };
+
             let (stdout, stderr, success) = run_openclaw_raw(&cmd_args);
             if success {
                 Ok(serde_json::json!({ "ok": true, "output": stdout }))
             } else {
                 Ok(serde_json::json!({ "ok": false, "output": format!("{}{}", stdout, stderr) }))
             }
-        }
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
 
-    match result {
-        Ok(val) => Ok(Json(val)),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+        match result {
+            Ok(val) => Ok(Json(val)),
+            Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+        }
     }
 }
 
-/// Run a command while streaming output. Opens the first URL found in the
-/// output in the system browser (for OAuth login flows).
-fn run_with_browser_intercept(cmd_str: &str) -> Result<serde_json::Value, String> {
-    use std::io::BufRead;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    let shell = clawladder_core::path_utils::user_shell();
-    let mut cmd = std::process::Command::new(&shell);
-    cmd.args(["-lc", cmd_str]);
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    clawladder_core::path_utils::apply_rich_env(&mut cmd);
-
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
-
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-
-    // Flag: only open the first URL we find across both streams
-    let opened = Arc::new(AtomicBool::new(false));
-
-    let opened_out = opened.clone();
-    let stdout_handle = std::thread::spawn(move || {
-        let mut collected = String::new();
-        if let Some(pipe) = stdout_pipe {
-            let reader = std::io::BufReader::new(pipe);
-            for line in reader.lines().flatten() {
-                tracing::info!("[auth stdout] {}", line);
-                if !opened_out.load(Ordering::Relaxed) {
-                    if let Some(url) = extract_first_url(&line) {
-                        tracing::info!("Opening OAuth URL in browser: {}", url);
-                        if open::that(&url).is_ok() {
-                            opened_out.store(true, Ordering::Relaxed);
-                        }
-                    }
-                }
-                collected.push_str(&line);
-                collected.push('\n');
-            }
-        }
-        collected
-    });
-
-    let opened_err = opened.clone();
-    let stderr_handle = std::thread::spawn(move || {
-        let mut collected = String::new();
-        if let Some(pipe) = stderr_pipe {
-            let reader = std::io::BufReader::new(pipe);
-            for line in reader.lines().flatten() {
-                tracing::info!("[auth stderr] {}", line);
-                if !opened_err.load(Ordering::Relaxed) {
-                    if let Some(url) = extract_first_url(&line) {
-                        tracing::info!("Opening OAuth URL in browser: {}", url);
-                        if open::that(&url).is_ok() {
-                            opened_err.store(true, Ordering::Relaxed);
-                        }
-                    }
-                }
-                collected.push_str(&line);
-                collected.push('\n');
-            }
-        }
-        collected
-    });
-
-    let status = child.wait().map_err(|e| format!("Wait failed: {}", e))?;
-    let stdout = stdout_handle.join().unwrap_or_default();
-    let stderr = stderr_handle.join().unwrap_or_default();
-
-    if status.success() {
-        Ok(serde_json::json!({ "ok": true, "output": stdout }))
-    } else {
-        Ok(serde_json::json!({
-            "ok": false,
-            "output": format!("{}{}", stdout, stderr),
-        }))
-    }
-}
+// (run_with_browser_intercept removed — OAuth now uses PTY sessions)
 
 /// Extract the first URL from a line of text. Returns None if no URL found.
 fn extract_first_url(line: &str) -> Option<String> {

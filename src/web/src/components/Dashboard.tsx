@@ -25,6 +25,7 @@ import {
   Activity,
   Puzzle,
   Monitor,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -273,9 +274,6 @@ export function Dashboard({ installed, version, pinnedVersion, onResetConfig, de
       // Fetch user-configured models (non-blocking)
       fetchUserModels().then((m) => {
         setUserModels(m);
-        // Auto-open models dialog if no providers configured at all
-        const hasProviders = (m.providers.length > 0) || (m.envKeys.length > 0);
-        if (!hasProviders) setModelsDialogOpen(true);
       }).catch(() => {});
       // Fetch extension counts (non-blocking)
       Promise.all([
@@ -359,9 +357,6 @@ export function Dashboard({ installed, version, pinnedVersion, onResetConfig, de
                   {pinnedVersion && (
                     <span className="ml-2 text-muted-foreground/60">
                       · 锁定版本 {pinnedVersion}
-                      {versionNum && versionNum !== pinnedVersion && (
-                        <span className="text-amber-500 ml-1">⚠ 版本不一致</span>
-                      )}
                     </span>
                   )}
                 </p>
@@ -479,7 +474,8 @@ export function Dashboard({ installed, version, pinnedVersion, onResetConfig, de
             icon={<Cpu className="w-4 h-4" />}
             label="模型"
             value={(() => {
-              const dp = userModels?.defaultPrimary ?? ocStatus?.sessions?.defaults?.model ?? "";
+              const hasProviders = (userModels?.providers?.length ?? 0) > 0 || (userModels?.envKeys?.length ?? 0) > 0;
+              const dp = userModels?.defaultPrimary ?? (hasProviders ? ocStatus?.sessions?.defaults?.model : "") ?? "";
               if (!dp) return "—";
               // defaultPrimary is like "anthropic/claude-sonnet-4-20250514"
               const parts = dp.split("/");
@@ -488,6 +484,7 @@ export function Dashboard({ installed, version, pinnedVersion, onResetConfig, de
             onClick={() => setModelsDialogOpen(true)}
             subtext={
               (() => {
+                const hasProviders = (userModels?.providers?.length ?? 0) > 0 || (userModels?.envKeys?.length ?? 0) > 0;
                 const dp = userModels?.defaultPrimary ?? "";
                 const providerKey = dp.split("/")[0];
                 const modelId = dp.split("/").slice(1).join("/");
@@ -497,10 +494,10 @@ export function Dashboard({ installed, version, pinnedVersion, onResetConfig, de
                       <span className="text-xs text-primary">{providerKey}</span>
                     )}
                     <span className="font-mono text-[10px] opacity-70 truncate">
-                      {modelId || ocStatus?.sessions?.defaults?.model}
+                      {modelId || (hasProviders ? ocStatus?.sessions?.defaults?.model : undefined)}
                     </span>
                   </span>
-                ) : ocStatus?.sessions?.defaults?.model ? (
+                ) : (hasProviders && ocStatus?.sessions?.defaults?.model) ? (
                   <span className="font-mono text-[10px] opacity-70">
                     {ocStatus.sessions.defaults.model}
                   </span>
@@ -527,11 +524,14 @@ export function Dashboard({ installed, version, pinnedVersion, onResetConfig, de
             valueLabel="会话"
             onClick={() => setSessionsDialogOpen(true)}
             subtext={
-              ocStatus?.sessions?.defaults?.model ? (
-                <span className="font-mono text-[10px] opacity-70">
-                  {ocStatus.sessions.defaults.model.slice(0, 24)}
-                </span>
-              ) : undefined
+              (() => {
+                const hasProviders = (userModels?.providers?.length ?? 0) > 0 || (userModels?.envKeys?.length ?? 0) > 0;
+                return (hasProviders && ocStatus?.sessions?.defaults?.model) ? (
+                  <span className="font-mono text-[10px] opacity-70">
+                    {ocStatus.sessions.defaults.model.slice(0, 24)}
+                  </span>
+                ) : undefined;
+              })()
             }
             className="col-span-2 sm:col-span-1"
           />
@@ -637,7 +637,7 @@ export function Dashboard({ installed, version, pinnedVersion, onResetConfig, de
               }
             />
             <ActionButton
-              icon={<RefreshCw className="w-4 h-4" />}
+              icon={<Sparkles className="w-4 h-4" />}
               label="配置助手"
               disabled={!!actionLoading}
               onClick={() => onResetConfig()}
@@ -750,7 +750,7 @@ export function Dashboard({ installed, version, pinnedVersion, onResetConfig, de
           if (!open) setPendingAction(null);
         }}
       >
-        <DialogContent className="min-w-2xl max-w-4xl">
+        <DialogContent className="min-w-2xl max-w-4xl" showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>{pendingAction?.title}</DialogTitle>
             <DialogDescription>{pendingAction?.description}</DialogDescription>

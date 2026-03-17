@@ -1,7 +1,14 @@
 // Step 3: Skills — Bundle Skills + Recommended Skills (clawhub)
-// Diff-based: user toggles are local, install/uninstall happens on "下一步"
-import { useState, useEffect, useCallback } from "react";
-import { Loader2, ExternalLink, Package } from "lucide-react";
+// Supports category-based selection and individual skill toggles
+// Loads skill catalog from recommendedSkills.json
+import { useState, useEffect, useCallback, useMemo } from "react";
+import {
+  Loader2,
+  ExternalLink,
+  Package,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
@@ -19,46 +26,62 @@ import {
 } from "../../lib/api";
 
 import { useOnboardingStore } from "../../stores/onboarding";
+import catalogData from "../../data/recommendedSkills.json";
 
-// ── Recommended skills from ClawHub ─────────────────────────────────────────
+// ── Types from JSON catalog ─────────────────────────────────────────────────
 
-interface RecommendedSkill {
+interface CatalogSkill {
   id: string;
   name: string;
+  slug: string;
+  author: string;
   description: string;
   url: string;
-  slug: string;
-  emoji: string;
+  downloads: number;
+  stars: number;
+  installs: number;
+  security: string;
+  recommended?: boolean;
+  verifiedBy?: string[];
+  setup?: "none" | "api-key" | "cli-install";
 }
 
-const RECOMMENDED_SKILLS: RecommendedSkill[] = [
-  {
-    id: "skill-vetter",
-    name: "Skill Vetter",
-    description: "自动审查和验证 Skills 的安全性与兼容性",
-    url: "https://clawhub.ai/spclaudehome/skill-vetter",
-    slug: "skill-vetter",
-    emoji: "🔍",
-  },
-];
+interface CatalogCategory {
+  id: string;
+  label: string;
+  emoji: string;
+  description: string;
+  popular?: boolean;
+  recommended?: boolean;
+  skills: CatalogSkill[];
+}
+
+interface Catalog {
+  categories: CatalogCategory[];
+}
+
+const catalog = catalogData as Catalog;
+
+// Build a flat lookup: skillId → CatalogSkill + slug
+const allCatalogSkills: CatalogSkill[] = catalog.categories.flatMap(
+  (c) => c.skills,
+);
+const skillById = new Map(allCatalogSkills.map((s) => [s.id, s]));
 
 // ── Persisted state (lifted to wizard) ──────────────────────────────────────
 
 export interface SkillsStepState {
   clawhubInstalled: boolean;
   installClawhubChecked: boolean;
-  /** What the user currently has selected in the UI */
   selectedSkills: Set<string>;
-  /** Snapshot of what was actually installed when the step first loaded */
   initialInstalledSkills: Set<string>;
-  /** What is currently installed (updated after install/uninstall) */
   installedSkills: Set<string>;
   skillErrors: Record<string, string>;
 }
 
 export const defaultSkillsStepState: SkillsStepState = {
   clawhubInstalled: false,
-  installClawhubChecked: false,
+  installClawhubChecked: true,
   selectedSkills: new Set(),
   initialInstalledSkills: new Set(),
   installedSkills: new Set(),
@@ -87,6 +110,7 @@ const IDLE_PROGRESS: Progress = { phase: "idle", current: 0, total: 0 };
 export function StepSkills({ onNext, onBack }: Props) {
   const state = useOnboardingStore((s) => s.skillsState);
   const patch = useOnboardingStore((s) => s.patchSkillsState);
+
   // Bundle skills (local, re-fetched each mount)
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,8 +120,11 @@ export function StepSkills({ onNext, onBack }: Props) {
   const [clawhubChecking, setClawhubChecking] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState<Progress>(IDLE_PROGRESS);
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [bundleExpanded, setBundleExpanded] = useState(false);
 
-  // Destructure persisted state
   const {
     clawhubInstalled,
     installClawhubChecked,
@@ -115,12 +142,34 @@ export function StepSkills({ onNext, onBack }: Props) {
       .then((res) => {
         const list = res.skills ?? [];
         setSkills(list.filter((s) => s.eligible));
+
+        // Cross-match: detect community skills already installed
+        // (via clawhub, manual cp, or any other method)
+        const installedNames = new Set(
+          list.filter((s) => s.eligible).map((s) => s.name.toLowerCase()),
+        );
+        const alreadyInstalled = new Set<string>();
+        for (const cs of allCatalogSkills) {
+          if (
+            installedNames.has(cs.slug.toLowerCase()) ||
+            installedNames.has(cs.name.toLowerCase()) ||
+            installedNames.has(cs.id.toLowerCase())
+          ) {
+            alreadyInstalled.add(cs.id);
+          }
+        }
+        if (alreadyInstalled.size > 0) {
+          patch({
+            installedSkills: alreadyInstalled,
+            initialInstalledSkills: alreadyInstalled,
+            selectedSkills: new Set([...selectedSkills, ...alreadyInstalled]),
+          });
+        }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // ── Check clawhub + snapshot initial installed skills ───────────────────
 
   const checkClawhub = useCallback(() => {
     setClawhubChecking(true);
@@ -140,7 +189,24 @@ export function StepSkills({ onNext, onBack }: Props) {
     checkClawhub();
   }, [loadSkills, checkClawhub]);
 
-  // ── Toggles (local only, no API calls) ──────────────────────────────────
+  // ── Derived: selected count per category ──────────────────────────────
+
+  const categorySelectionInfo = useMemo(() => {
+    const info = new Map<
+      string,
+      { total: number; selected: number; allSelected: boolean }
+    >();
+    for (const cat of catalog.categories) {
+      const total = cat.skills.length;
+      const selected = cat.skills.filter((s) =>
+        selectedSkills.has(s.id),
+      ).length;
+      info.set(cat.id, { total, selected, allSelected: selected === total });
+    }
+    return info;
+  }, [selectedSkills]);
+
+  // ── Toggles ───────────────────────────────────────────────────────────
 
   const handleClawhubToggle = (checked: boolean) => {
     if (!checked) {
@@ -157,20 +223,38 @@ export function StepSkills({ onNext, onBack }: Props) {
     patch({ selectedSkills: next });
   };
 
-  // ── Handle next: diff → uninstall → install ─────────────────────────────
+  const handleCategoryToggle = (categoryId: string, checked: boolean) => {
+    const cat = catalog.categories.find((c) => c.id === categoryId);
+    if (!cat) return;
+    const next = new Set(selectedSkills);
+    for (const skill of cat.skills) {
+      if (checked) next.add(skill.id);
+      else next.delete(skill.id);
+    }
+    patch({ selectedSkills: next });
+  };
+
+  const toggleCategory = (catId: string) => {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(catId)) next.delete(catId);
+      else next.add(catId);
+      return next;
+    });
+  };
+
+  // ── Handle next: diff → uninstall → install ─────────────────────────
 
   const handleNext = async () => {
-    // Compute diff
-    const toUninstall = RECOMMENDED_SKILLS.filter(
+    const toUninstall = allCatalogSkills.filter(
       (s) => installedSkills.has(s.id) && !selectedSkills.has(s.id),
     );
-    const toInstall = RECOMMENDED_SKILLS.filter(
+    const toInstall = allCatalogSkills.filter(
       (s) => selectedSkills.has(s.id) && !installedSkills.has(s.id),
     );
     const needClawhub =
       installClawhubChecked && !clawhubInstalled && toInstall.length > 0;
 
-    // No changes → skip
     if (toUninstall.length === 0 && toInstall.length === 0 && !needClawhub) {
       onNext();
       return;
@@ -218,8 +302,11 @@ export function StepSkills({ onNext, onBack }: Props) {
         hasError = true;
         newErrors.__clawhub__ =
           e instanceof Error ? e.message : "安装 ClawHub 失败";
-        // Uncheck ClawHub and all skills on failure
-        patch({ installClawhubChecked: false, selectedSkills: new Set(), skillErrors: newErrors });
+        patch({
+          installClawhubChecked: false,
+          selectedSkills: new Set(),
+          skillErrors: newErrors,
+        });
       }
     }
 
@@ -241,15 +328,17 @@ export function StepSkills({ onNext, onBack }: Props) {
           } else {
             hasError = true;
             newErrors[skill.id] = msg;
-            // Uncheck the skill on install failure
             newSelected.delete(skill.id);
           }
         }
-        patch({ installedSkills: newInstalled, skillErrors: newErrors, selectedSkills: newSelected });
+        patch({
+          installedSkills: newInstalled,
+          skillErrors: newErrors,
+          selectedSkills: newSelected,
+        });
       }
     }
 
-    // Update initial snapshot to reflect new reality
     patch({
       installedSkills: newInstalled,
       initialInstalledSkills: new Set(newInstalled),
@@ -263,7 +352,7 @@ export function StepSkills({ onNext, onBack }: Props) {
 
   const clawhubGateDisabled = !installClawhubChecked || processing;
 
-  // ── Progress label ──────────────────────────────────────────────────────
+  // ── Progress label ──────────────────────────────────────────────────
 
   const progressLabel = (() => {
     if (!processing) return null;
@@ -280,7 +369,9 @@ export function StepSkills({ onNext, onBack }: Props) {
     }
   })();
 
-  // ── Render ──────────────────────────────────────────────────────────────
+  const selectedCount = selectedSkills.size;
+
+  // ── Render ──────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -296,10 +387,13 @@ export function StepSkills({ onNext, onBack }: Props) {
         <div className="flex flex-col gap-6 pb-4 px-4">
           {/* ── Bundle Skills ─────────────────────────────────────────── */}
           <Card className="border border-border">
-            <CardHeader>
+            <CardHeader
+              className="cursor-pointer select-none"
+              onClick={() => setBundleExpanded((v) => !v)}
+            >
               <div className="flex items-center gap-2">
                 <Package className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm ">内置 Skills</span>
+                <span className="text-sm">内置 Skills</span>
                 {!loading && (
                   <Badge variant="secondary" className="text-xs">
                     {skills.length} 个可用
@@ -308,32 +402,40 @@ export function StepSkills({ onNext, onBack }: Props) {
                 {loading && (
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                 )}
+                <span className="ml-auto shrink-0 text-muted-foreground">
+                  {bundleExpanded ? (
+                    <ChevronDown className="w-4 h-4" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" />
+                  )}
+                </span>
               </div>
             </CardHeader>
-
+            {bundleExpanded && (
             <CardContent className="pt-0 pb-3">
               {error && (
                 <p className="text-xs text-muted-foreground py-2">
                   暂时无法检测 Skills（OpenClaw CLI 未就绪），可直接跳过。
                 </p>
               )}
-
               {!loading && !error && skills.length === 0 && (
                 <p className="text-xs text-muted-foreground py-2">
                   未检测到可用的内置 Skills
                 </p>
               )}
-
               {skills.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {skills.map((skill) => (
-                    <Badge key={skill.name} variant="secondary" className="text-xs">
+                    <Badge
+                      key={skill.name}
+                      variant="secondary"
+                      className="text-xs"
+                    >
                       {skill.name}
                     </Badge>
                   ))}
                 </div>
               )}
-
               <p className="text-xs text-muted-foreground mt-3">
                 内置 Skills 由系统自动检测。安装完成后可在{" "}
                 <span className="text-foreground">
@@ -342,14 +444,21 @@ export function StepSkills({ onNext, onBack }: Props) {
                 页面管理。
               </p>
             </CardContent>
+            )}
           </Card>
 
-          {/* ── Recommended Skills (clawhub) ───────────────────────────── */}
+          {/* ── Community Skills Section ──────────────────────────────── */}
           <div className="flex flex-col mt-4 gap-4">
             <div>
-              <h2 className="text-lg font-semibold">推荐社区 Skills</h2>
+              <h2 className="text-lg font-semibold">社区优选 Skills</h2>
               <p className="text-sm text-muted-foreground mt-1">
-                从 ClawHub 安装社区贡献的 Skills，扩展 OpenClaw 的能力。
+                社区精选的高质量 Skills，按使用场景分类，勾选后自动从 ClawHub 安装。
+                标有 🔑 的需要在 OpenClaw 设置中配置 API Key，标有 📦 的需要额外 CLI 工具（OpenClaw 会自动提示安装）。
+                {selectedCount > 0 && (
+                  <span className="text-primary ml-1">
+                    已选 {selectedCount} 个
+                  </span>
+                )}
               </p>
             </div>
 
@@ -380,11 +489,11 @@ export function StepSkills({ onNext, onBack }: Props) {
                       )}
                     </CardTitle>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      安装社区 Skills 需要 ClawHub CLI（
+                      安装以下社区 Skills 必须先安装 ClawHub CLI（
                       <code className="bg-muted px-1 rounded text-[11px]">
                         npm i -g clawhub
                       </code>
-                      ）
+                      ），取消勾选将跳过所有社区 Skills 安装
                     </p>
                   </div>
                 </div>
@@ -396,65 +505,204 @@ export function StepSkills({ onNext, onBack }: Props) {
               </CardHeader>
             </Card>
 
-            {/* Recommended skill cards */}
-            {RECOMMENDED_SKILLS.map((skill) => {
-              const isSelected = selectedSkills.has(skill.id);
-              const isInstalled = installedSkills.has(skill.id);
-              const hasError = skillErrors[skill.id];
 
-              return (
-                <Card
-                  key={skill.id}
-                  className={`border ${
-                    clawhubGateDisabled
-                      ? "border-border opacity-50"
-                      : isSelected
-                        ? "border-primary/50"
-                        : "border-border"
-                  }`}
-                >
-                  <CardHeader>
-                    <div className="flex items-center gap-3">
-                      <Checkbox
-                        checked={isSelected}
-                        disabled={clawhubGateDisabled}
-                        onCheckedChange={(checked) =>
-                          handleSkillToggle(skill.id, checked === true)
-                        }
-                        className="shrink-0"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <CardTitle className="text-sm flex items-center gap-2">
-                          {skill.name}
-                          {isInstalled && (
-                            <Badge variant="secondary" className="text-[10px]">
-                              ✓ 已安装
+            {/* ── Category Accordion ───────────────────────────────────── */}
+            <div className="flex flex-col gap-2">
+              {catalog.categories.map((cat) => {
+                const isExpanded = expandedCategories.has(cat.id);
+                const info = categorySelectionInfo.get(cat.id)!;
+
+                return (
+                  <Card
+                    key={cat.id}
+                    className={`border ${
+                      clawhubGateDisabled
+                        ? "border-border opacity-50"
+                        : info.selected > 0
+                          ? "border-primary/30"
+                          : "border-border"
+                    }`}
+                  >
+                    <CardHeader className="cursor-pointer select-none">
+                      <div className="flex items-center gap-3">
+                        {/* Category-level checkbox */}
+                        <Checkbox
+                          checked={info.allSelected}
+                          disabled={clawhubGateDisabled}
+                          onCheckedChange={(checked) =>
+                            handleCategoryToggle(cat.id, checked === true)
+                          }
+                          className="shrink-0"
+                          {...(info.selected > 0 && !info.allSelected
+                            ? { "data-state": "indeterminate" as const }
+                            : {})}
+                        />
+
+                        {/* Clickable header area */}
+                        <div
+                          className="flex-1 flex items-center gap-2 min-w-0"
+                          onClick={() => toggleCategory(cat.id)}
+                        >
+                          <span className="text-base">{cat.emoji}</span>
+                          <span className="text-sm font-medium">
+                            {cat.label}
+                          </span>
+                          <Badge
+                            variant="secondary"
+                            className="text-[10px] px-1.5"
+                          >
+                            {info.selected}/{info.total}
+                          </Badge>
+                          {cat.popular && (
+                            <Badge
+                              variant="default"
+                              className="text-[10px] px-1.5 bg-orange-500/10 text-orange-600 border-orange-500/20"
+                            >
+                              热门
                             </Badge>
                           )}
-                        </CardTitle>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {skill.description}
-                        </p>
+                          {cat.recommended && (
+                            <Badge
+                              variant="default"
+                              className="text-[10px] px-1.5 bg-green-500/10 text-green-600 border-green-500/20"
+                            >
+                              推荐
+                            </Badge>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleCategory(cat.id)}
+                          className="shrink-0 text-muted-foreground"
+                        >
+                          {isExpanded ? (
+                            <ChevronDown className="w-4 h-4" />
+                          ) : (
+                            <ChevronRight className="w-4 h-4" />
+                          )}
+                        </button>
                       </div>
-                      <a
-                        href={skill.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                        onClick={(e) => e.stopPropagation()}
+
+                      {/* Category description (always visible) */}
+                      <p
+                        className="text-xs text-muted-foreground mt-1 ml-9"
+                        onClick={() => toggleCategory(cat.id)}
                       >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    </div>
-                    {hasError && (
-                      <p className="text-xs text-destructive mt-2 break-all">
-                        {hasError}
+                        {cat.description}
                       </p>
+                    </CardHeader>
+
+                    {/* Expanded skill list */}
+                    {isExpanded && (
+                      <CardContent>
+                        <div className="flex flex-col gap-1 ml-9">
+                          {cat.skills.map((skill) => {
+                            const isSelected = selectedSkills.has(skill.id);
+                            const isInstalled = installedSkills.has(skill.id);
+                            const hasError = skillErrors[skill.id];
+
+                            return (
+                              <div
+                                key={skill.id}
+                                className={`flex items-start p-2 gap-3 rounded-md transition-colors ${
+                                  isSelected ? "bg-primary/5" : "hover:bg-muted/50"
+                                }`}
+                              >
+                                <Checkbox
+                                  checked={isSelected}
+                                  disabled={clawhubGateDisabled}
+                                  onCheckedChange={(checked) =>
+                                    handleSkillToggle(
+                                      skill.id,
+                                      checked === true,
+                                    )
+                                  }
+                                  className="shrink-0 mt-0.5"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-medium">
+                                      {skill.name}
+                                    </span>
+                                    {isInstalled && (
+                                      <Badge
+                                        variant="secondary"
+                                        className="text-[10px]"
+                                      >
+                                        ✓ 已安装
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-muted-foreground mt-0.5">
+                                    {skill.description}
+                                  </p>
+                                  <div className="flex items-center gap-3 mt-1">
+                                    <span className="text-[10px] text-muted-foreground">
+                                      ⬇️ {skill.downloads >= 1000 ? `${(skill.downloads / 1000).toFixed(1)}k` : skill.downloads}
+                                    </span>
+                                    <span className="text-[10px] text-muted-foreground">
+                                      ⭐ {skill.stars}
+                                    </span>
+                                    <span className="text-[10px] text-muted-foreground">
+                                      by @{skill.author}
+                                    </span>
+                                    {skill.security === "benign" && (
+                                      <span
+                                        className="text-[10px] text-green-600"
+                                      >
+                                        ✓ 安全
+                                      </span>
+                                    )}
+                                    {skill.security?.startsWith("suspicious") && (
+                                      <span
+                                        className="text-[10px] text-yellow-600"
+                                      >
+                                        ⚠ 需审查
+                                      </span>
+                                    )}
+                                    {skill.setup === "api-key" && (
+                                      <span
+                                        className="text-[10px] text-blue-500"
+                                        title="安装后需在 OpenClaw 设置中配置 API Key"
+                                      >
+                                        🔑 需配置
+                                      </span>
+                                    )}
+                                    {skill.setup === "cli-install" && (
+                                      <span
+                                        className="text-[10px] text-blue-500"
+                                        title="需要额外 CLI 工具，OpenClaw 会自动提示安装"
+                                      >
+                                        📦 需依赖
+                                      </span>
+                                    )}
+                                  </div>
+                                  {hasError && (
+                                    <p className="text-xs text-destructive mt-1 break-all">
+                                      {hasError}
+                                    </p>
+                                  )}
+                                </div>
+                                <a
+                                  href={skill.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="shrink-0 text-muted-foreground hover:text-foreground transition-colors mt-0.5"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                </a>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </CardContent>
                     )}
-                  </CardHeader>
-                </Card>
-              );
-            })}
+                  </Card>
+                );
+              })}
+            </div>
           </div>
         </div>
       </ScrollArea>

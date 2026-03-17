@@ -447,16 +447,124 @@ export interface AuthLoginRequest {
   provider: string;
   setup_token?: string;
   auth_choice?: string;
+  auth_method?: string;
 }
 
 export interface AuthLoginResponse {
   ok: boolean;
   output: string;
   needsInteraction?: boolean;
+  session_id?: string;
 }
 
 export async function modelsAuthLogin(req: AuthLoginRequest): Promise<AuthLoginResponse> {
   return apiPost("/api/models/auth/login", req);
+}
+
+/**
+ * OAuth login via PTY session.
+ *
+ * 1. POST /api/models/auth/login → gets { session_id }
+ * 2. Connect WebSocket to monitor PTY output
+ * 3. Server opens browser automatically (URL interception in PTY ghost reader)
+ * 4. Wait for PTY exit message → resolve with success/failure
+ *
+ * @param onOutput optional callback for raw PTY output (for UI display)
+ */
+export function modelsAuthLoginPty(
+  req: AuthLoginRequest,
+  onOutput?: (text: string) => void,
+): { promise: Promise<AuthLoginResponse>; abort: () => void } {
+  let ws: WebSocket | null = null;
+  let aborted = false;
+
+  const promise = (async () => {
+    // Step 1: create PTY session
+    const res = await modelsAuthLogin(req);
+    if (!res.session_id) {
+      // Non-PTY path (setup-token etc.) — return directly
+      return res;
+    }
+
+    const sessionId = res.session_id;
+
+    // Step 2: connect WebSocket and wait for exit
+    return new Promise<AuthLoginResponse>((resolve) => {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${proto}//${location.host}/ws?session_id=${sessionId}`;
+      ws = new WebSocket(wsUrl);
+
+      let output = "";
+      // 5 minute timeout for OAuth flow
+      const timeout = setTimeout(() => {
+        ws?.close();
+        resolve({ ok: false, output: output || "OAuth 登录超时（5分钟）" });
+      }, 5 * 60 * 1000);
+
+      ws.onmessage = (ev) => {
+        if (aborted) return;
+        const data = ev.data;
+        if (typeof data === "string") {
+          // Check for exit message
+          try {
+            const msg = JSON.parse(data);
+            if (msg.type === "exit") {
+              clearTimeout(timeout);
+              ws?.close();
+              resolve({
+                ok: msg.code === 0,
+                output: output || (msg.code === 0 ? "认证成功" : "认证失败"),
+              });
+              return;
+            }
+          } catch {
+            // Not JSON — treat as text output
+          }
+          output += data;
+          onOutput?.(data);
+        } else if (data instanceof Blob) {
+          // Binary PTY data
+          data.text().then((text) => {
+            // Check if it's an exit message embedded in binary
+            if (text.startsWith('{"type":"exit"')) {
+              try {
+                const msg = JSON.parse(text);
+                if (msg.type === "exit") {
+                  clearTimeout(timeout);
+                  ws?.close();
+                  resolve({
+                    ok: msg.code === 0,
+                    output: output || (msg.code === 0 ? "认证成功" : "认证失败"),
+                  });
+                  return;
+                }
+              } catch { /* ignore */ }
+            }
+            output += text;
+            onOutput?.(text);
+          });
+        }
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timeout);
+        resolve({ ok: false, output: output || "WebSocket 连接失败" });
+      };
+
+      ws.onclose = () => {
+        clearTimeout(timeout);
+        // If we haven't resolved yet, treat close as failure
+        resolve({ ok: false, output: output || "连接已关闭" });
+      };
+    });
+  })();
+
+  const abort = () => {
+    aborted = true;
+    ws?.close();
+  };
+
+  return { promise, abort };
 }
 
 export interface AuthStatusResponse {

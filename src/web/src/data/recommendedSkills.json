@@ -1,0 +1,942 @@
+{
+  "version": 5,
+  "updatedAt": "2026-03-18",
+  "note": "所有 skills 均经过 ClawHub 页面直接验证 + 至少 2 个独立博客/社区来源交叉确认",
+  "sources": [
+    "clawhub.ai (官方页面直接验证)",
+    "openclawready.com (Tim Akdemir, 6 个月实测)",
+    "betterclaw.io (Shabnam Katoch, 生产环境测试)",
+    "rentamac.io (35 Skills 深度评测)",
+    "openclawai.net (Top 20, 安全过滤排名)",
+    "reddit.com/r/openclaw (社区推荐)"
+  ],
+  "categories": [
+    {
+      "id": "essentials",
+      "label": "必装精选",
+      "emoji": "⭐",
+      "description": "5 个来源一致推荐的 Top Skills，覆盖 90% 日常场景",
+      "popular": true,
+      "skills": [
+        {
+          "id": "self-improving-agent",
+          "name": "Self-Improving Agent",
+          "slug": "self-improving-agent",
+          "author": "steipete",
+          "description": "跨会话学习你的工作习惯，持续优化 Agent 表现。ClawHub 最高星标 skill",
+          "url": "https://clawhub.ai/skills/self-improving-agent",
+          "downloads": 32000,
+          "stars": 338,
+          "installs": 2800,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "openclawai.net #1",
+            "rentamac.io",
+            "betterclaw.io",
+            "openclawready.com"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "summarize",
+          "name": "Summarize",
+          "slug": "summarize",
+          "author": "steipete",
+          "description": "URL、PDF、图片、音频、YouTube 一键摘要，175k 下载",
+          "url": "https://clawhub.ai/skills/summarize",
+          "downloads": 175000,
+          "stars": 669,
+          "installs": 4000,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "openclawai.net #3",
+            "openclawready.com #2",
+            "rentamac.io",
+            "betterclaw.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "github",
+          "name": "GitHub",
+          "slug": "github",
+          "author": "steipete",
+          "description": "通过 gh CLI 管理 Issues、PR、CI Runs，开发者必备",
+          "url": "https://clawhub.ai/skills/github",
+          "downloads": 117000,
+          "stars": 389,
+          "installs": 2900,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "openclawai.net #4",
+            "openclawready.com #6",
+            "rentamac.io",
+            "betterclaw.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "weather",
+          "name": "Weather",
+          "slug": "weather",
+          "author": "steipete",
+          "description": "免 API Key 天气查询，零配置即用",
+          "url": "https://clawhub.ai/skills/weather",
+          "downloads": 100000,
+          "stars": 299,
+          "installs": 2500,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "openclawai.net #6",
+            "openclawready.com #8",
+            "rentamac.io",
+            "betterclaw.io"
+          ],
+          "setup": "none"
+        }
+      ],
+      "recommended": true
+    },
+    {
+      "id": "security",
+      "label": "安全工具",
+      "emoji": "🛡️",
+      "description": "Skill 审查、链接检测，保护你的 Agent",
+      "popular": true,
+      "skills": [
+        {
+          "id": "skill-vetter",
+          "name": "Skill Vetter",
+          "slug": "skill-vetter",
+          "author": "spclaudehome",
+          "description": "安装任何社区 Skill 前先用它扫描，检测红旗和可疑模式",
+          "url": "https://clawhub.ai/skills/skill-vetter",
+          "downloads": 3500,
+          "stars": 447,
+          "installs": 2100,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "rentamac.io",
+            "reddit r/openclaw"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "clawddocs",
+          "name": "Clawdbot Docs Expert",
+          "slug": "clawddocs",
+          "author": "NicholasSpisak",
+          "description": "OpenClaw 官方文档导航，替代 Google 搜索直接问 Agent",
+          "url": "https://clawhub.ai/skills/clawddocs",
+          "downloads": 9900,
+          "stars": 94,
+          "installs": 800,
+          "security": "benign",
+          "verifiedBy": [
+            "openclawai.net",
+            "betterclaw.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "skill-guard",
+          "name": "Skill Guard",
+          "slug": "skill-guard",
+          "author": "jamesOuttake",
+          "description": "安装前安全扫描：检测 prompt 注入、恶意代码、数据泄露、硬编码密钥",
+          "url": "https://clawhub.ai/jamesouttake/skill-guard",
+          "downloads": 3800,
+          "stars": 2,
+          "installs": 35,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证",
+            "reddit r/selfhosted"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "1password",
+          "name": "1Password",
+          "slug": "1password",
+          "author": "steipete",
+          "description": "1Password CLI 集成：安全读取、注入密钥，避免明文存储",
+          "url": "https://clawhub.ai/skills/1password",
+          "downloads": 16400,
+          "stars": 35,
+          "installs": 933,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证",
+            "openclaw bundled"
+          ],
+          "setup": "cli-install"
+        }
+      ],
+      "recommended": true
+    },
+    {
+      "id": "search-research",
+      "label": "搜索与研究",
+      "emoji": "🔎",
+      "description": "让 Agent 获取实时信息",
+      "popular": true,
+      "skills": [
+        {
+          "id": "agent-browser",
+          "name": "Agent Browser",
+          "slug": "agent-browser",
+          "author": "TheSethRose",
+          "description": "Rust 高速无头浏览器自动化：导航、点击、截图、录屏",
+          "url": "https://clawhub.ai/skills/agent-browser",
+          "downloads": 142000,
+          "stars": 615,
+          "installs": 2700,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "openclawai.net #7",
+            "rentamac.io",
+            "betterclaw.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "playwright",
+          "name": "Playwright",
+          "slug": "playwright",
+          "author": "ivangdavila",
+          "description": "Playwright MCP 浏览器自动化：导航、表单、截图、数据抓取、测试",
+          "url": "https://clawhub.ai/skills/playwright",
+          "downloads": 11800,
+          "stars": 25,
+          "installs": 189,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ],
+          "setup": "cli-install"
+        },
+        {
+          "id": "multi-search-engine",
+          "name": "Multi Search Engine",
+          "slug": "multi-search-engine",
+          "author": "gpyAngyoujun",
+          "description": "17 个搜索引擎聚合，免 API Key 零配置",
+          "url": "https://clawhub.ai/skills/multi-search-engine",
+          "downloads": 4500,
+          "stars": 30,
+          "installs": 400,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ],
+          "setup": "none"
+        }
+      ]
+    },
+    {
+      "id": "productivity",
+      "label": "效率与知识管理",
+      "emoji": "⚡",
+      "description": "笔记、知识图谱、任务管理",
+      "popular": true,
+      "skills": [
+        {
+          "id": "obsidian",
+          "name": "Obsidian",
+          "slug": "obsidian",
+          "author": "steipete",
+          "description": "本地 Markdown 笔记管理，隐私优先的知识库方案",
+          "url": "https://clawhub.ai/skills/obsidian",
+          "downloads": 55100,
+          "stars": 216,
+          "installs": 1700,
+          "security": "suspicious-medium",
+          "verifiedBy": [
+            "openclawai.net #9",
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "ontology",
+          "name": "Ontology",
+          "slug": "ontology",
+          "author": "oswalpalash",
+          "description": "结构化知识图谱，存储联系人、公司、项目之间的关系",
+          "url": "https://clawhub.ai/skills/ontology",
+          "downloads": 27600,
+          "stars": 94,
+          "installs": 1200,
+          "security": "benign",
+          "verifiedBy": [
+            "openclawai.net #10",
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "session-logs",
+          "name": "Session Logs",
+          "slug": "session-logs",
+          "author": "guogang1024",
+          "description": "搜索和分析历史会话记录，回顾之前的对话和费用",
+          "url": "https://clawhub.ai/skills/session-logs",
+          "downloads": 19100,
+          "stars": 15,
+          "installs": 984,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证",
+            "openclaw bundled"
+          ],
+          "setup": "none"
+        }
+      ]
+    },
+    {
+      "id": "macos",
+      "label": "macOS 原生",
+      "emoji": "🍎",
+      "description": "零配置接入 Apple 生态，仅限 macOS",
+      "popular": true,
+      "skills": [
+        {
+          "id": "apple-reminders",
+          "name": "Apple Reminders",
+          "slug": "apple-reminders",
+          "author": "steipete",
+          "description": "Apple 提醒事项：创建、完成、删除，通过 iCloud 同步到 iPhone",
+          "url": "https://clawhub.ai/skills/apple-reminders",
+          "downloads": 5800,
+          "stars": 41,
+          "installs": 902,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "openclawready.com #3",
+            "rentamac.io",
+            "betterclaw.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "apple-notes",
+          "name": "Apple Notes",
+          "slug": "apple-notes",
+          "author": "steipete",
+          "description": "Apple 备忘录集成：创建、搜索、管理笔记",
+          "url": "https://clawhub.ai/skills/apple-notes",
+          "downloads": 6500,
+          "stars": 45,
+          "installs": 500,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io",
+            "betterclaw.io"
+          ],
+          "setup": "cli-install"
+        },
+        {
+          "id": "apple-calendar",
+          "name": "Apple Calendar",
+          "slug": "apple-calendar",
+          "author": "steipete",
+          "description": "Apple 日历：查看日程、检查空闲时间",
+          "url": "https://clawhub.ai/skills/apple-calendar",
+          "downloads": 4400,
+          "stars": 35,
+          "installs": 400,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "apple-shortcuts",
+          "name": "Apple Shortcuts",
+          "slug": "apple-shortcuts",
+          "author": "steipete",
+          "description": "运行任意 Apple 快捷指令，让 Agent 接入你的所有自动化",
+          "url": "https://clawhub.ai/skills/apple-shortcuts",
+          "downloads": 5900,
+          "stars": 40,
+          "installs": 450,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "things-mac",
+          "name": "Things Mac",
+          "slug": "things-mac",
+          "author": "steipete",
+          "description": "Things 3 任务管理器集成",
+          "url": "https://clawhub.ai/skills/things-mac",
+          "downloads": 6200,
+          "stars": 38,
+          "installs": 400,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "imessage",
+          "name": "iMessage",
+          "slug": "imsg",
+          "author": "steipete",
+          "description": "iMessage 和 SMS：查看聊天记录、搜索、发送消息",
+          "url": "https://clawhub.ai/skills/imsg",
+          "downloads": 3500,
+          "stars": 28,
+          "installs": 300,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "peekaboo",
+          "name": "Peekaboo",
+          "slug": "peekaboo",
+          "author": "steipete",
+          "description": "macOS UI 自动化：截图标注、点击、输入、窗口管理",
+          "url": "https://clawhub.ai/skills/peekaboo",
+          "downloads": 18300,
+          "stars": 55,
+          "installs": 989,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证",
+            "openclaw bundled"
+          ],
+          "setup": "cli-install"
+        }
+      ]
+    },
+    {
+      "id": "office-docs",
+      "label": "办公文档与营销",
+      "emoji": "📄",
+      "description": "Word、Excel、PPT 文档处理、AI 写作优化与营销策略",
+      "skills": [
+        {
+          "id": "excel-xlsx",
+          "name": "Excel / XLSX",
+          "slug": "excel-xlsx",
+          "author": "ivangdavila",
+          "description": "Excel 工作簿处理：公式、格式、日期、模板保留、大文件流式读写",
+          "url": "https://clawhub.ai/ivangdavila/excel-xlsx",
+          "downloads": 17800,
+          "stars": 56,
+          "installs": 210,
+          "security": "benign",
+          "setup": "none",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ]
+        },
+        {
+          "id": "word-docx",
+          "name": "Word / DOCX",
+          "slug": "word-docx",
+          "author": "ivangdavila",
+          "description": "Word 文档处理：样式、编号、修订追踪、表格、兼容性检查",
+          "url": "https://clawhub.ai/ivangdavila/word-docx",
+          "downloads": 21300,
+          "stars": 75,
+          "installs": 218,
+          "security": "benign",
+          "setup": "none",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ]
+        },
+        {
+          "id": "powerpoint-pptx",
+          "name": "PowerPoint / PPTX",
+          "slug": "powerpoint-pptx",
+          "author": "ivangdavila",
+          "description": "PPT 演示文稿：布局、模板、占位符、图表、视觉 QA",
+          "url": "https://clawhub.ai/ivangdavila/powerpoint-pptx",
+          "downloads": 12500,
+          "stars": 35,
+          "installs": 126,
+          "security": "benign",
+          "setup": "none",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ]
+        },
+        {
+          "id": "humanizer",
+          "name": "Humanizer",
+          "slug": "humanizer",
+          "author": "biostartechnology",
+          "description": "去除 AI 写作痕迹：修复夸张措辞、破折号滥用、AI 词汇等 20+ 模式",
+          "url": "https://clawhub.ai/skills/humanizer",
+          "downloads": 59900,
+          "stars": 419,
+          "installs": 792,
+          "security": "benign",
+          "setup": "none",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ]
+        },
+        {
+          "id": "marketing",
+          "name": "Marketing",
+          "slug": "marketing",
+          "author": "ivangdavila",
+          "description": "营销策略全流程：定位、内容日历、渠道规划、A/B 测试、ROI 分析",
+          "url": "https://clawhub.ai/ivangdavila/marketing",
+          "downloads": 5200,
+          "stars": 14,
+          "installs": 62,
+          "security": "benign",
+          "setup": "none",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ]
+        },
+        {
+          "id": "seo",
+          "name": "SEO",
+          "slug": "seo",
+          "author": "ivangdavila",
+          "description": "SEO 优化：关键词研究、技术审计、内容优化、Schema 标记",
+          "url": "https://clawhub.ai/ivangdavila/seo",
+          "downloads": 4800,
+          "stars": 12,
+          "installs": 55,
+          "security": "benign",
+          "setup": "none",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ]
+        },
+        {
+          "id": "social-media-manager",
+          "name": "Social Media Manager",
+          "slug": "social-media-manager",
+          "author": "ivangdavila",
+          "description": "社媒运营：内容排期、平台适配、互动策略、数据分析",
+          "url": "https://clawhub.ai/ivangdavila/social-media-manager",
+          "downloads": 3900,
+          "stars": 10,
+          "installs": 45,
+          "security": "benign",
+          "setup": "none",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "developer",
+      "label": "开发者工具",
+      "emoji": "💻",
+      "description": "MCP 管理、前端设计、Docker、Git 工作流",
+      "skills": [
+        {
+          "id": "mcporter",
+          "name": "Mcporter",
+          "slug": "mcporter",
+          "author": "steipete",
+          "description": "MCP Server 管理器：安装、配置、管理 Model Context Protocol 服务",
+          "url": "https://clawhub.ai/skills/mcporter",
+          "downloads": 11100,
+          "stars": 65,
+          "installs": 750,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "openclawai.net #15",
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "docker",
+          "name": "Docker",
+          "slug": "docker",
+          "author": "ivangdavila",
+          "description": "Docker 容器、镜像、Compose、网络、卷管理参考手册",
+          "url": "https://clawhub.ai/skills/docker",
+          "downloads": 6700,
+          "stars": 10,
+          "installs": 88,
+          "security": "benign",
+          "verifiedBy": [
+            "openclawai.net #16",
+            "betterclaw.io"
+          ],
+          "setup": "cli-install"
+        },
+        {
+          "id": "frontend-design",
+          "name": "Frontend Design",
+          "slug": "frontend-design",
+          "author": "steipete",
+          "description": "生成可用的前端界面组件，不只是代码片段",
+          "url": "https://clawhub.ai/skills/frontend-design",
+          "downloads": 8100,
+          "stars": 50,
+          "installs": 550,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "documentation",
+          "name": "Documentation",
+          "slug": "documentation",
+          "author": "steipete",
+          "description": "技术文档自动生成与维护",
+          "url": "https://clawhub.ai/skills/documentation",
+          "downloads": 7800,
+          "stars": 18,
+          "installs": 17,
+          "security": "benign",
+          "verifiedBy": [
+            "openclawai.net #17"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "commit-message",
+          "name": "Commit Message",
+          "slug": "commit-message",
+          "author": "bastos",
+          "description": "根据 staged changes 自动生成 Git commit message",
+          "url": "https://clawhub.ai/skills/commit-message",
+          "downloads": 3000,
+          "stars": 25,
+          "installs": 250,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io"
+          ],
+          "setup": "none"
+        }
+      ]
+    },
+    {
+      "id": "media",
+      "label": "媒体与创作",
+      "emoji": "🎨",
+      "description": "图片生成、语音转文字、视频摘要",
+      "skills": [
+        {
+          "id": "openai-whisper",
+          "name": "OpenAI Whisper",
+          "slug": "openai-whisper",
+          "author": "steipete",
+          "description": "本地语音转文字，无需 API Key，音频不离开你的电脑",
+          "url": "https://clawhub.ai/skills/openai-whisper",
+          "downloads": 11500,
+          "stars": 70,
+          "installs": 800,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "openclawai.net #18",
+            "rentamac.io"
+          ],
+          "setup": "cli-install"
+        },
+        {
+          "id": "image",
+          "name": "Image",
+          "slug": "image",
+          "author": "ivangdavila",
+          "description": "图片处理全流程：格式转换、压缩、裁剪、元数据、平台适配",
+          "url": "https://clawhub.ai/skills/image",
+          "downloads": 8400,
+          "stars": 9,
+          "installs": 103,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "video",
+          "name": "Video",
+          "slug": "video",
+          "author": "ivangdavila",
+          "description": "FFmpeg 视频处理：压缩、转码、字幕、平台适配（TikTok/YouTube/Reels）",
+          "url": "https://clawhub.ai/skills/video",
+          "downloads": 921,
+          "stars": 3,
+          "installs": 15,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ],
+          "setup": "cli-install"
+        },
+        {
+          "id": "screenshot",
+          "name": "Screenshot",
+          "slug": "screenshot",
+          "author": "ivangdavila",
+          "description": "截图最佳实践：屏幕、窗口、网页、模拟器、CI 环境",
+          "url": "https://clawhub.ai/skills/screenshot",
+          "downloads": 7000,
+          "stars": 17,
+          "installs": 84,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "nano-pdf",
+          "name": "Nano PDF",
+          "slug": "nano-pdf",
+          "author": "steipete",
+          "description": "自然语言编辑 PDF：改标题、修错字、调排版、合并拆分",
+          "url": "https://clawhub.ai/skills/nano-pdf",
+          "downloads": 63300,
+          "stars": 154,
+          "installs": 1700,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证",
+            "openclaw bundled"
+          ],
+          "setup": "cli-install"
+        }
+      ]
+    },
+    {
+      "id": "ai-enhancement",
+      "label": "AI 能力增强",
+      "emoji": "🤖",
+      "description": "省钱、调试、模型管理、Skill 发现",
+      "skills": [
+        {
+          "id": "find-skills",
+          "name": "Find Skills",
+          "slug": "find-skills",
+          "author": "JimLiuxinghai",
+          "description": "Skill 发现工具，帮 Agent 自动搜索和安装所需技能",
+          "url": "https://clawhub.ai/skills/find-skills",
+          "downloads": 231000,
+          "stars": 942,
+          "installs": 3600,
+          "security": "suspicious-medium",
+          "verifiedBy": [
+            "openclawai.net",
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "free-ride",
+          "name": "Free Ride",
+          "slug": "free-ride",
+          "author": "Shaivpidadi",
+          "description": "通过 OpenRouter 免费使用多种 AI 模型，零成本试用",
+          "url": "https://clawhub.ai/skills/free-ride",
+          "downloads": 11300,
+          "stars": 45,
+          "installs": 800,
+          "security": "benign",
+          "verifiedBy": [
+            "openclawai.net",
+            "rentamac.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "model-usage",
+          "name": "Model Usage",
+          "slug": "model-usage",
+          "author": "steipete",
+          "description": "按模型追踪 API 费用，告别账单惊喜",
+          "url": "https://clawhub.ai/skills/model-usage",
+          "downloads": 8300,
+          "stars": 50,
+          "installs": 600,
+          "security": "benign",
+          "recommended": true,
+          "verifiedBy": [
+            "rentamac.io",
+            "betterclaw.io"
+          ],
+          "setup": "none"
+        },
+        {
+          "id": "oracle",
+          "name": "Oracle",
+          "slug": "oracle",
+          "author": "steipete",
+          "description": "用第二个模型 review 代码，相当于 AI 同事帮你 code review",
+          "url": "https://clawhub.ai/skills/oracle",
+          "downloads": 3300,
+          "stars": 25,
+          "installs": 200,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io"
+          ],
+          "setup": "none"
+        }
+      ]
+    },
+    {
+      "id": "smart-home",
+      "label": "智能家居",
+      "emoji": "🏠",
+      "description": "音响、灯光、温控",
+      "skills": [
+        {
+          "id": "sonoscli",
+          "name": "Sonos CLI",
+          "slug": "sonoscli",
+          "author": "steipete",
+          "description": "Sonos 音响控制：发现设备、播放、音量、分组",
+          "url": "https://clawhub.ai/skills/sonoscli",
+          "downloads": 60600,
+          "stars": 41,
+          "installs": 2000,
+          "security": "benign",
+          "verifiedBy": [
+            "openclawai.net",
+            "rentamac.io"
+          ],
+          "setup": "cli-install"
+        },
+        {
+          "id": "spotify-player",
+          "name": "Spotify Player",
+          "slug": "spotify-player",
+          "author": "steipete",
+          "description": "Spotify 播放控制：播放、暂停、切歌、搜索",
+          "url": "https://clawhub.ai/skills/spotify-player",
+          "downloads": 6200,
+          "stars": 35,
+          "installs": 865,
+          "security": "benign",
+          "verifiedBy": [
+            "rentamac.io",
+            "betterclaw.io"
+          ],
+          "setup": "cli-install"
+        },
+        {
+          "id": "openhue",
+          "name": "OpenHue",
+          "slug": "openhue",
+          "author": "steipete",
+          "description": "Philips Hue 灯光控制：颜色、亮度、场景，局域网直连无需云端",
+          "url": "https://clawhub.ai/skills/openhue",
+          "downloads": 8100,
+          "stars": 7,
+          "installs": 812,
+          "security": "benign",
+          "verifiedBy": [
+            "clawhub.ai 直接验证"
+          ],
+          "setup": "cli-install"
+        }
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "id": "starter",
+      "label": "⭐ 必装精选",
+      "description": "5 个来源一致推荐的 Top 5，覆盖 90% 日常场景",
+      "skillIds": [
+        "self-improving-agent",
+        "summarize",
+        "gog",
+        "github",
+        "weather"
+      ]
+    },
+    {
+      "id": "macos-power",
+      "label": "🍎 macOS 原生",
+      "description": "零配置接入 Apple 生态，Mac 用户必选",
+      "skillIds": [
+        "apple-reminders",
+        "apple-notes",
+        "apple-calendar",
+        "apple-shortcuts",
+        "things-mac",
+        "imessage"
+      ]
+    },
+    {
+      "id": "developer",
+      "label": "💻 开发者工具",
+      "description": "GitHub + MCP + Docker + 前端 + Git 工作流",
+      "skillIds": [
+        "github",
+        "mcporter",
+        "docker",
+        "frontend-design",
+        "commit-message",
+        "oracle"
+      ]
+    },
+    {
+      "id": "office",
+      "label": "⚡ 效率与知识管理",
+      "description": "邮件、Slack、笔记、知识管理全覆盖",
+      "skillIds": [
+        "gog",
+        "slack",
+        "notion",
+        "obsidian",
+        "himalaya",
+        "ontology",
+        "summarize",
+        "todoist"
+      ]
+    },
+    {
+      "id": "content-creator",
+      "label": "🎨 媒体与创作",
+      "description": "图片生成、语音转文字、视频摘要",
+      "skillIds": [
+        "nano-banana-pro",
+        "openai-whisper",
+        "gemini",
+        "summarize"
+      ]
+    },
+    {
+      "id": "safe-first",
+      "label": "🛡️ 安全工具",
+      "description": "先装安全工具，再装其他 Skill",
+      "skillIds": [
+        "skill-vetter",
+        "model-usage",
+        "clawddocs"
+      ]
+    }
+  ]
+}

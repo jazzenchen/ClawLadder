@@ -18,6 +18,11 @@ export interface ProviderMeta {
   authModes: AuthMode[];
   authChoice?: string;
   pluginName?: string;
+  /** Auth method options — passed as `--method <id>` to skip interactive selection.
+   *  When multiple methods exist the UI shows a selector. */
+  authMethods?: { id: string; label: string }[];
+  /** Shortcut: single method (legacy compat, prefer authMethods) */
+  authMethod?: string;
   oauthNote?: string;
   category: "popular" | "cloud" | "local" | "other";
   groupId?: string;
@@ -127,7 +132,7 @@ export const PROVIDER_META: ProviderMeta[] = [
   // ── Google OAuth / Vertex ─────────────────────────────────────────────
   { id: "google-vertex", label: "Google Vertex AI", api: "google-generative-ai", envKey: "", placeholder: "(gcloud ADC)", baseUrl: "", needsApiKey: false, exampleModel: "gemini-3-pro-preview", authModes: ["aws-sdk"], category: "cloud", oauthNote: "使用 gcloud ADC 认证，确保已运行 gcloud auth application-default login", groupId: "google", variantLabel: "Vertex AI (ADC)" },
   { id: "google-antigravity", label: "Google Antigravity (OAuth)", api: "google-generative-ai", envKey: "", placeholder: "(OAuth 登录)", baseUrl: "", needsApiKey: false, exampleModel: "gemini-3-pro-preview", authModes: ["plugin-oauth"], pluginName: "google-antigravity-auth", category: "cloud", oauthNote: "⚠️ 非官方集成，部分用户报告 Google 账号受限。建议使用非关键账号", groupId: "google", variantLabel: "Antigravity (OAuth)" },
-  { id: "google-gemini-cli", label: "Google Gemini CLI (OAuth)", api: "google-generative-ai", envKey: "", placeholder: "(OAuth 登录)", baseUrl: "", needsApiKey: false, exampleModel: "gemini-3-pro-preview", authModes: ["plugin-oauth"], pluginName: "google-gemini-cli-auth", category: "cloud", oauthNote: "⚠️ 非官方集成，部分用户报告 Google 账号受限。建议使用非关键账号", groupId: "google", variantLabel: "Gemini CLI (OAuth)" },
+  { id: "google-gemini-cli", label: "Google Gemini CLI (OAuth)", api: "google-generative-ai", envKey: "", placeholder: "(OAuth 登录)", baseUrl: "", needsApiKey: false, exampleModel: "gemini-3-pro-preview", authModes: ["plugin-oauth"], pluginName: "google-gemini-cli-auth", authMethods: [{ id: "oauth", label: "OAuth" }], category: "cloud", oauthNote: "⚠️ 非官方集成，部分用户报告 Google 账号受限。建议使用非关键账号", groupId: "google", variantLabel: "Gemini CLI (OAuth)" },
 
   // ── China / Regional ──────────────────────────────────────────────────
   { id: "zai", label: "Z.AI (GLM)", api: "openai-completions", envKey: "ZAI_API_KEY", placeholder: "sk-...", baseUrl: "", needsApiKey: true, exampleModel: "glm-5", authModes: ["apiKey"], authChoice: "zai-api-key", category: "cloud" },
@@ -141,8 +146,8 @@ export const PROVIDER_META: ProviderMeta[] = [
   { id: "xiaomi", label: "小米 (Xiaomi)", api: "openai-completions", envKey: "XIAOMI_API_KEY", placeholder: "sk-...", baseUrl: "", needsApiKey: true, exampleModel: "xiaomi-model", authModes: ["apiKey"], category: "cloud" },
 
   // ── Coding Plan (免费 OAuth) ─────────────────────────────────────────
-  { id: "qwen-portal", label: "Qwen (Coding Plan)", api: "openai-completions", envKey: "", placeholder: "(OAuth 登录)", baseUrl: "", needsApiKey: false, exampleModel: "coder-model", authModes: ["plugin-oauth"], pluginName: "qwen-portal-auth", category: "cloud" },
-  { id: "minimax-portal", label: "MiniMax (Coding Plan)", api: "anthropic-messages", envKey: "", placeholder: "(OAuth 登录)", baseUrl: "", needsApiKey: false, exampleModel: "MiniMax-M2.5", authModes: ["plugin-oauth"], pluginName: "minimax-portal-auth", category: "cloud", groupId: "minimax", variantLabel: "Coding Plan (OAuth)" },
+  { id: "qwen-portal", label: "Qwen (Coding Plan)", api: "openai-completions", envKey: "", placeholder: "(OAuth 登录)", baseUrl: "", needsApiKey: false, exampleModel: "coder-model", authModes: ["plugin-oauth"], pluginName: "qwen-portal-auth", authMethods: [{ id: "device", label: "Device Code" }], category: "cloud" },
+  { id: "minimax-portal", label: "MiniMax (Coding Plan)", api: "anthropic-messages", envKey: "", placeholder: "(OAuth 登录)", baseUrl: "", needsApiKey: false, exampleModel: "MiniMax-M2.5", authModes: ["plugin-oauth"], pluginName: "minimax-portal-auth", authMethods: [{ id: "oauth", label: "海外版 (Global)" }, { id: "oauth-cn", label: "国内版 (China)" }], category: "cloud", groupId: "minimax", variantLabel: "Coding Plan (OAuth)" },
 
   // ── Gateways / Proxies ────────────────────────────────────────────────
   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", api: "openai-completions", envKey: "AI_GATEWAY_API_KEY", placeholder: "sk-...", baseUrl: "", needsApiKey: true, exampleModel: "anthropic/claude-opus-4.6", authModes: ["apiKey"], authChoice: "ai-gateway-api-key", category: "other" },
@@ -211,6 +216,13 @@ export function getProviderGroup(providerId: string): ProviderGroup | undefined 
   return PROVIDER_GROUPS.find((g) =>
     g.variants.some((v) => v.id === providerId),
   );
+}
+
+/** Resolve effective auth methods list for a provider (handles legacy authMethod field) */
+export function getAuthMethods(meta: ProviderMeta): { id: string; label: string }[] {
+  if (meta.authMethods && meta.authMethods.length > 0) return meta.authMethods;
+  if (meta.authMethod) return [{ id: meta.authMethod, label: meta.authMethod }];
+  return [];
 }
 
 /** Static fallback for catalog when API is unavailable */
