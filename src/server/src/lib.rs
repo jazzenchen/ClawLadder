@@ -86,6 +86,7 @@ pub async fn run_server(port: u16, dist_dir: PathBuf, logger: Logger) -> Result<
         .route("/api/models/auth/login", post(models_auth_login_handler))
         .route("/api/models/auth/status", get(models_auth_status_handler))
         .route("/api/plugins/enable", post(plugins_enable_handler))
+        .route("/api/plugins/install", post(plugins_install_handler))
         // Health
         .route("/api/health", get(health_handler))
         // Channels management
@@ -2188,6 +2189,83 @@ async fn plugins_enable_handler(
         } else {
             Err(format!("{}{}", stderr, stdout))
         }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
+
+    match result {
+        Ok(val) => Ok(Json(val)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct PluginInstallRequest {
+    package_name: String,
+}
+
+/// POST /api/plugins/install — install an OpenClaw plugin by npm package name
+///
+/// Two independent steps:
+/// 1. If plugin not yet installed → run `openclaw plugins install`.
+/// 2. Always ensure plugin id is in `plugins.allow` in openclaw.json.
+async fn plugins_install_handler(
+    Json(body): Json<PluginInstallRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let pkg = body.package_name.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        // Derive plugin id from package name:
+        //   "@dingtalk-real-ai/dingtalk-connector" → "dingtalk-connector"
+        //   "@wecom/wecom-openclaw-plugin"         → "wecom-openclaw-plugin"
+        let plugin_id = pkg
+            .rsplit('/')
+            .next()
+            .unwrap_or(&pkg)
+            .to_string();
+
+        // ── Step 1: Install (skip if already present) ────────────────────
+        let already_installed = config::openclaw_dir()
+            .map(|d| d.join("extensions").join(&plugin_id).exists())
+            .unwrap_or(false);
+
+        let mut install_output = String::new();
+        if !already_installed {
+            let (stdout, stderr, success) = run_openclaw_raw(
+                &format!("plugins install {}", shell_escape(&pkg)),
+            );
+            install_output = format!("{}{}", stdout, stderr);
+            if !success && !install_output.contains("plugin already exists") {
+                return Err(install_output);
+            }
+        }
+
+        // ── Step 2: Ensure plugins.allow contains this id ────────────────
+        if let Ok(Some(mut config)) = config::read_config_raw() {
+            if let Some(root) = config.as_object_mut() {
+                let plugins = root
+                    .entry("plugins")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(plugins_obj) = plugins.as_object_mut() {
+                    let allow = plugins_obj
+                        .entry("allow")
+                        .or_insert_with(|| serde_json::json!([]));
+                    if let Some(arr) = allow.as_array_mut() {
+                        let id_val = serde_json::Value::String(plugin_id.clone());
+                        if !arr.contains(&id_val) {
+                            arr.push(id_val);
+                        }
+                    }
+                }
+                let _ = config::write_config_raw(&config);
+            }
+        }
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "plugin_id": plugin_id,
+            "already_installed": already_installed,
+        }))
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;

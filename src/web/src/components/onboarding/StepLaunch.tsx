@@ -54,7 +54,7 @@ export function StepLaunch({ onBack, onComplete }: Props) {
   const defaultProvider = models.providers.find(
     (p) => p.id === models.defaultProvider && p.enabled,
   );
-  const { feishu, telegram } = channels;
+  const { feishu, dingtalk, wecom, telegram } = channels;
   const hasModel = !!defaultProvider?.selectedModel;
 
   const handleLaunch = useCallback(async () => {
@@ -181,6 +181,30 @@ export function StepLaunch({ onBack, onComplete }: Props) {
         };
       }
 
+      if (dingtalk.enabled && dingtalk.clientId && dingtalk.clientSecret) {
+        // Read gateway auth token so dingtalk connector can authenticate
+        const gwAuth = (
+          (existingConfig.gateway as Record<string, unknown>)?.auth as Record<string, unknown>
+        ) ?? {};
+        channelsObj["dingtalk-connector"] = {
+          enabled: true,
+          clientId: dingtalk.clientId,
+          clientSecret: dingtalk.clientSecret,
+          separateSessionByConversation: true,
+          ...(gwAuth.token ? { gatewayToken: gwAuth.token } : {}),
+        };
+      }
+
+      if (wecom.enabled && wecom.botId && wecom.secret) {
+        channelsObj.wecom = {
+          enabled: true,
+          botId: wecom.botId,
+          secret: wecom.secret,
+          dmPolicy: "open",
+          groupPolicy: "open",
+        };
+      }
+
       existingConfig.channels = channelsObj;
 
       // 4.5 Ensure gateway defaults are set
@@ -193,6 +217,17 @@ export function StepLaunch({ onBack, onComplete }: Props) {
         gwSection.controlUi = {
           allowedOrigins: ["http://127.0.0.1:18789"],
         };
+      }
+      // Enable HTTP chatCompletions endpoint when dingtalk is enabled
+      // (dingtalk connector calls /v1/chat/completions via HTTP)
+      if (dingtalk.enabled) {
+        const http = (gwSection.http as Record<string, unknown>) ?? {};
+        const endpoints = (http.endpoints as Record<string, unknown>) ?? {};
+        const cc = (endpoints.chatCompletions as Record<string, unknown>) ?? {};
+        cc.enabled = true;
+        endpoints.chatCompletions = cc;
+        http.endpoints = endpoints;
+        gwSection.http = http;
       }
       existingConfig.gateway = gwSection;
 
@@ -230,7 +265,7 @@ export function StepLaunch({ onBack, onComplete }: Props) {
     } finally {
       setLaunching(false);
     }
-  }, [defaultProvider, models.defaultProvider, feishu, telegram]);
+  }, [defaultProvider, models.defaultProvider, feishu, dingtalk, wecom, telegram]);
 
   return (
     <div className="flex flex-col flex-1 min-h-0">

@@ -730,6 +730,11 @@ export async function pluginsDisable(name: string): Promise<{ ok: boolean; outpu
   return apiPost("/api/plugins/disable", { name });
 }
 
+/** Install an OpenClaw plugin by npm package name (e.g. "@wecom/wecom-openclaw-plugin"). */
+export async function pluginsInstall(packageName: string): Promise<{ ok: boolean; output: string }> {
+  return apiPost("/api/plugins/install", { package_name: packageName });
+}
+
 export async function fetchPluginsList(): Promise<unknown> {
   return apiFetch("/api/plugins/list");
 }

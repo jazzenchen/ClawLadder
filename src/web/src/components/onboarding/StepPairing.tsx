@@ -44,6 +44,9 @@ function channelLabel(type: string) {
     telegram: "Telegram",
     feishu: "飞书 (Feishu)",
     lark: "Lark",
+    dingtalk: "钉钉",
+    "dingtalk-connector": "钉钉",
+    wecom: "企业微信",
   };
   return map[type] ?? type;
 }
@@ -58,8 +61,10 @@ function channelIcon(type: string) {
 export function StepPairing({ onBack, onComplete }: Props) {
   const channels = useOnboardingStore((s) => s.channelsConfig);
   const goToStep = useOnboardingStore((s) => s.goToStep);
-  const { feishu, telegram } = channels;
-  const hasChannels = feishu.enabled || telegram.enabled;
+  const { feishu, dingtalk, wecom, telegram } = channels;
+  const hasChannels = feishu.enabled || dingtalk.enabled || wecom.enabled || telegram.enabled;
+  /** Channels that use pairing mode (feishu / telegram) */
+  const hasPairingChannels = feishu.enabled || telegram.enabled;
 
   // Detect incomplete config
   const feishuIncomplete = feishu.enabled && (!feishu.appId || !feishu.appSecret);
@@ -122,7 +127,8 @@ export function StepPairing({ onBack, onComplete }: Props) {
 
   const pending = requests.filter((r) => !approvedCodes.has(r.code));
 
-  // Build the list of channel keys to render cards for
+  // Build the list of channel keys to render pairing cards for
+  // (only feishu & telegram use pairing mode)
   const enabledChannels: string[] = [];
   if (feishu.enabled) enabledChannels.push("feishu");
   if (telegram.enabled) enabledChannels.push("telegram");
@@ -147,10 +153,11 @@ export function StepPairing({ onBack, onComplete }: Props) {
         <p className="text-sm text-muted-foreground mt-1">
           将通讯工具与 OpenClaw 配对，让 Bot 识别你的身份。
           {!hasChannels && " 你尚未配置任何通讯工具，可以跳过此步骤。"}
+          {hasChannels && !hasPairingChannels && " 钉钉和企业微信无需配对，可以直接跳过。"}
         </p>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto px-4 pb-4 space-y-3">
+      <div className="flex-1 min-h-0 overflow-auto p-4 space-y-3">
         {!hasChannels ? (
           <Card>
             <div className="py-8 flex flex-col items-center gap-3 text-center px-4">
@@ -159,6 +166,17 @@ export function StepPairing({ onBack, onComplete }: Props) {
                 未配置通讯工具，跳过配对即可。
                 <br />
                 你可以稍后在设置中添加飞书或 Telegram，再进行配对。
+              </p>
+            </div>
+          </Card>
+        ) : !hasPairingChannels ? (
+          <Card>
+            <div className="py-8 flex flex-col items-center gap-3 text-center px-4">
+              <CheckCircle2 className="w-10 h-10 text-emerald-500/60" />
+              <p className="text-sm text-muted-foreground">
+                钉钉和企业微信使用企业身份验证，无需手动配对。
+                <br />
+                直接点击下一步即可。
               </p>
             </div>
           </Card>

@@ -13,6 +13,9 @@ import { defaultHooksStepState } from "../components/onboarding/StepHooks";
 import { getProviderMeta } from "../components/onboarding/providerMeta";
 import { fetchConfig } from "../lib/api";
 
+// Re-export channel sub-types for convenience
+export type { ChannelsConfig } from "../components/onboarding/StepChannels";
+
 // ── Steps ───────────────────────────────────────────────────────────────────
 
 export const STEPS = [
@@ -41,6 +44,9 @@ interface OnboardingState {
   launchDone: boolean;
   configLoaded: boolean;
 
+  /** Whether the user chose "国内源" during install — controls Telegram visibility */
+  useChinaMirror: boolean;
+
   // Navigation actions
   goToStep: (stepId: StepId) => void;
   goNext: () => void;
@@ -54,6 +60,7 @@ interface OnboardingState {
   setHooksState: (state: HooksStepState) => void;
   patchHooksState: (partial: Partial<HooksStepState>) => void;
   setLaunchDone: (done: boolean) => void;
+  setUseChinaMirror: (v: boolean) => void;
 
   // Reset (for re-entering wizard)
   reset: () => void;
@@ -75,6 +82,7 @@ const initialState = {
   hooksState: defaultHooksStepState,
   launchDone: false,
   configLoaded: false,
+  useChinaMirror: true,
 };
 
 /** Derive the StepId from the store's stepIndex */
@@ -125,6 +133,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     set((s) => ({ hooksState: { ...s.hooksState, ...partial } })),
 
   setLaunchDone: (done) => set({ launchDone: done }),
+  setUseChinaMirror: (v) => set({ useChinaMirror: v }),
 
   // ── Reset ───────────────────────────────────────────────────────────────
 
@@ -219,6 +228,9 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       const channelsRaw = (raw.channels as Record<string, unknown>) ?? {};
       const feishuRaw = (channelsRaw.feishu as Record<string, unknown>) ?? {};
       const telegramRaw = (channelsRaw.telegram as Record<string, unknown>) ?? {};
+      // dingtalk-connector is the key used in openclaw.json
+      const dingtalkRaw = (channelsRaw["dingtalk-connector"] as Record<string, unknown>) ?? {};
+      const wecomRaw = (channelsRaw.wecom as Record<string, unknown>) ?? {};
 
       const channelsConfig: ChannelsConfig = {
         feishu: {
@@ -227,6 +239,16 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
           appSecret: (feishuRaw.appSecret as string) ?? "",
           connectionMode: (feishuRaw.connectionMode as "websocket" | "webhook") ?? "websocket",
           domain: (feishuRaw.domain as "feishu" | "lark") ?? "feishu",
+        },
+        dingtalk: {
+          enabled: !!dingtalkRaw.enabled,
+          clientId: (dingtalkRaw.clientId as string) ?? "",
+          clientSecret: (dingtalkRaw.clientSecret as string) ?? "",
+        },
+        wecom: {
+          enabled: !!wecomRaw.enabled,
+          botId: (wecomRaw.botId as string) ?? "",
+          secret: (wecomRaw.secret as string) ?? "",
         },
         telegram: {
           enabled: !!telegramRaw.enabled,

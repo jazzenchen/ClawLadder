@@ -8,6 +8,7 @@ import { WelcomeView, type InstallSettings } from "./components/WelcomeView";
 import { PasswordDialog } from "./components/PasswordDialog";
 import { InstalledView } from "./components/InstalledView";
 import { ErrorView } from "./components/ErrorView";
+import { useOnboardingStore } from "./stores/onboarding";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -271,7 +272,11 @@ export default function App() {
   }
 
   if (phase === "initializing") {
-    return <InitializingView onComplete={() => setPhase("onboarding")} />;
+    return <InitializingView onComplete={() => {
+      // Sync the install-time china-mirror preference into the onboarding store
+      useOnboardingStore.getState().setUseChinaMirror(installSettings.useChinaMirror);
+      setPhase("onboarding");
+    }} />;
   }
 
   if (phase === "installed") {

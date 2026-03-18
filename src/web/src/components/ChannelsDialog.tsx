@@ -40,6 +40,7 @@ import {
   fetchConfig,
   saveConfig,
   gatewayRestart,
+  pluginsInstall,
   type PairingRequest,
 } from "@/lib/api";
 
@@ -81,6 +82,18 @@ interface TelegramFormData {
   botToken: string;
 }
 
+interface DingtalkFormData {
+  enabled: boolean;
+  clientId: string;
+  clientSecret: string;
+}
+
+interface WecomFormData {
+  enabled: boolean;
+  botId: string;
+  secret: string;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -97,6 +110,8 @@ function channelLabel(type: string) {
     lark: "Lark",
     wechat: "微信",
     dingtalk: "钉钉",
+    "dingtalk-connector": "钉钉",
+    wecom: "企业微信",
     slack: "Slack",
     discord: "Discord",
   };
@@ -117,6 +132,25 @@ const defaultTelegram: TelegramFormData = {
   botToken: "",
 };
 
+const defaultDingtalk: DingtalkFormData = {
+  enabled: false,
+  clientId: "",
+  clientSecret: "",
+};
+
+const defaultWecom: WecomFormData = {
+  enabled: false,
+  botId: "",
+  secret: "",
+};
+
+/** npm package names for channels that need plugin install */
+const PLUGIN_PACKAGES: Record<string, string> = {
+  dingtalk: "@dingtalk-real-ai/dingtalk-connector",
+  "dingtalk-connector": "@dingtalk-real-ai/dingtalk-connector",
+  wecom: "@wecom/wecom-openclaw-plugin",
+};
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -133,12 +167,15 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
   const [hasLoaded, setHasLoaded] = useState(false);
 
   // ---- inline config editing ----
-  const [editing, setEditing] = useState<"feishu" | "telegram" | null>(null);
+  const [editing, setEditing] = useState<"feishu" | "telegram" | "dingtalk" | "wecom" | null>(null);
   const [feishuForm, setFeishuForm] = useState<FeishuFormData>(defaultFeishu);
   const [telegramForm, setTelegramForm] = useState<TelegramFormData>(defaultTelegram);
+  const [dingtalkForm, setDingtalkForm] = useState<DingtalkFormData>(defaultDingtalk);
+  const [wecomForm, setWecomForm] = useState<WecomFormData>(defaultWecom);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [pluginInstalling, setPluginInstalling] = useState<string | null>(null);
 
   // ---- data fetching ----
   const refresh = useCallback(async () => {
@@ -220,6 +257,25 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
           botToken: (tg.botToken as string) ?? "",
         });
       }
+
+      // dingtalk-connector is the key in openclaw.json
+      const dt = (channelsObj["dingtalk-connector"] ?? channelsObj.dingtalk) as Record<string, unknown> | undefined;
+      if (dt) {
+        setDingtalkForm({
+          enabled: (dt.enabled as boolean) ?? false,
+          clientId: (dt.clientId as string) ?? "",
+          clientSecret: (dt.clientSecret as string) ?? "",
+        });
+      }
+
+      const wc = channelsObj.wecom as Record<string, unknown> | undefined;
+      if (wc) {
+        setWecomForm({
+          enabled: (wc.enabled as boolean) ?? false,
+          botId: (wc.botId as string) ?? "",
+          secret: (wc.secret as string) ?? "",
+        });
+      }
     } catch {
       // ignore
     }
@@ -278,7 +334,76 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
         }
       }
 
+      if (editing === "dingtalk") {
+        // Install plugin first if needed
+        const pkg = PLUGIN_PACKAGES.dingtalk;
+        try {
+          setPluginInstalling("dingtalk");
+          await pluginsInstall(pkg);
+        } catch {
+          // Plugin may already be installed — continue
+        } finally {
+          setPluginInstalling(null);
+        }
+
+        if (dingtalkForm.enabled && dingtalkForm.clientId && dingtalkForm.clientSecret) {
+          // Read gateway auth token so dingtalk connector can authenticate
+          const gwAuth = (
+            (config.gateway as Record<string, unknown>)?.auth as Record<string, unknown>
+          ) ?? {};
+          channelsObj["dingtalk-connector"] = {
+            enabled: true,
+            clientId: dingtalkForm.clientId,
+            clientSecret: dingtalkForm.clientSecret,
+            separateSessionByConversation: true,
+            ...(gwAuth.token ? { gatewayToken: gwAuth.token } : {}),
+          };
+        } else if (!dingtalkForm.enabled) {
+          channelsObj["dingtalk-connector"] = { enabled: false };
+        }
+      }
+
+      if (editing === "wecom") {
+        // Install plugin first if needed
+        const pkg = PLUGIN_PACKAGES.wecom;
+        try {
+          setPluginInstalling("wecom");
+          await pluginsInstall(pkg);
+        } catch {
+          // Plugin may already be installed — continue
+        } finally {
+          setPluginInstalling(null);
+        }
+
+        if (wecomForm.enabled && wecomForm.botId && wecomForm.secret) {
+          channelsObj.wecom = {
+            enabled: true,
+            botId: wecomForm.botId,
+            secret: wecomForm.secret,
+            dmPolicy: "open",
+            groupPolicy: "open",
+          };
+        } else if (!wecomForm.enabled) {
+          channelsObj.wecom = { enabled: false };
+        }
+      }
+
       config.channels = channelsObj;
+
+      // Enable HTTP chatCompletions endpoint when dingtalk is enabled
+      // (dingtalk connector calls /v1/chat/completions via HTTP)
+      if (editing === "dingtalk" && dingtalkForm.enabled) {
+        const gw = (config.gateway as Record<string, unknown>) ?? {};
+        const http = (gw.http as Record<string, unknown>) ?? {};
+        const endpoints = (http.endpoints as Record<string, unknown>) ?? {};
+        const cc = (endpoints.chatCompletions as Record<string, unknown>) ?? {};
+        cc.enabled = true;
+        endpoints.chatCompletions = cc;
+        http.endpoints = endpoints;
+        gw.http = http;
+        config.gateway = gw;
+      }
+
       await saveConfig(config);
       await gatewayRestart();
 
@@ -314,6 +439,8 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
   const pending = pairings.filter((r) => !approvedCodes.has(r.code));
   const hasFeishu = channelEntries.some(([k]) => k === "feishu" || k === "lark");
   const hasTelegram = channelEntries.some(([k]) => k === "telegram");
+  const hasDingtalk = channelEntries.some(([k]) => k === "dingtalk" || k === "dingtalk-connector");
+  const hasWecom = channelEntries.some(([k]) => k === "wecom");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -366,7 +493,9 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
             const configured = ch.configured !== false;
             const botName =
               ch.probe?.bot?.username ?? ch.probe?.bot?.name;
-            const isEditing = editing === name || (editing === "feishu" && name === "lark");
+            const isEditing = editing === name
+              || (editing === "feishu" && name === "lark")
+              || (editing === "dingtalk" && name === "dingtalk-connector");
             // Filter pairing requests for this channel
             // Match loosely: feishu/lark are treated as the same channel
             const feishuLike = new Set(["feishu", "lark"]);
@@ -383,7 +512,7 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
                   variant="outline"
                   className="w-full justify-start gap-2 h-10 text-sm text-muted-foreground border-dashed"
                   onClick={() => {
-                    const editKey = (name === "lark" ? "feishu" : name) as "feishu" | "telegram";
+                    const editKey = (name === "lark" ? "feishu" : name === "dingtalk-connector" ? "dingtalk" : name) as "feishu" | "telegram" | "dingtalk" | "wecom";
                     setEditing(editKey);
                   }}
                 >
@@ -417,7 +546,7 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
                           size="sm"
                           className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground"
                           onClick={() => {
-                            const editKey = (name === "lark" ? "feishu" : name) as "feishu" | "telegram";
+                            const editKey = (name === "lark" ? "feishu" : name === "dingtalk-connector" ? "dingtalk" : name) as "feishu" | "telegram" | "dingtalk" | "wecom";
                             setEditing(editKey);
                           }}
                         >
@@ -446,13 +575,31 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
 
                   {/* Inline edit form for this channel */}
                   {isEditing ? (
-                    name === "telegram" || (editing === "telegram") ? (
+                    editing === "telegram" ? (
                       <TelegramEditForm
                         form={telegramForm}
                         onChange={setTelegramForm}
                         onSave={handleSave}
                         onCancel={() => setEditing(null)}
                         saving={saving}
+                      />
+                    ) : editing === "dingtalk" ? (
+                      <DingtalkEditForm
+                        form={dingtalkForm}
+                        onChange={setDingtalkForm}
+                        onSave={handleSave}
+                        onCancel={() => setEditing(null)}
+                        saving={saving}
+                        installing={pluginInstalling === "dingtalk"}
+                      />
+                    ) : editing === "wecom" ? (
+                      <WecomEditForm
+                        form={wecomForm}
+                        onChange={setWecomForm}
+                        onSave={handleSave}
+                        onCancel={() => setEditing(null)}
+                        saving={saving}
+                        installing={pluginInstalling === "wecom"}
                       />
                     ) : (
                       <FeishuEditForm
@@ -577,6 +724,34 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
                   添加飞书 / Lark
                 </Button>
               )}
+              {!hasDingtalk && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 text-xs"
+                  onClick={() => {
+                    setDingtalkForm({ ...defaultDingtalk, enabled: true });
+                    setEditing("dingtalk");
+                  }}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  添加钉钉
+                </Button>
+              )}
+              {!hasWecom && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 text-xs"
+                  onClick={() => {
+                    setWecomForm({ ...defaultWecom, enabled: true });
+                    setEditing("wecom");
+                  }}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  添加企业微信
+                </Button>
+              )}
               {!hasTelegram && (
                 <Button
                   variant="outline"
@@ -596,7 +771,9 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
 
           {/* New channel form (when adding, not editing existing) */}
           {editing && !channelEntries.some(([k]) =>
-            editing === "feishu" ? (k === "feishu" || k === "lark") : k === editing
+            editing === "feishu" ? (k === "feishu" || k === "lark")
+            : editing === "dingtalk" ? (k === "dingtalk" || k === "dingtalk-connector")
+            : k === editing
           ) && (
             <Card>
               <div className="space-y-3 px-4 -my-1">
@@ -607,7 +784,10 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
                     <MessageSquare className="w-4 h-4 text-muted-foreground" />
                   )}
                   <span className=" text-sm">
-                    {editing === "feishu" ? "飞书 (Feishu / Lark)" : "Telegram"}
+                    {editing === "feishu" ? "飞书 (Feishu / Lark)"
+                      : editing === "dingtalk" ? "钉钉"
+                      : editing === "wecom" ? "企业微信"
+                      : "Telegram"}
                   </span>
                   <Badge variant="secondary" className="text-[10px]">新增</Badge>
                 </div>
@@ -618,6 +798,24 @@ export function ChannelsDialog({ open, onOpenChange }: ChannelsDialogProps) {
                     onSave={handleSave}
                     onCancel={() => setEditing(null)}
                     saving={saving}
+                  />
+                ) : editing === "dingtalk" ? (
+                  <DingtalkEditForm
+                    form={dingtalkForm}
+                    onChange={setDingtalkForm}
+                    onSave={handleSave}
+                    onCancel={() => setEditing(null)}
+                    saving={saving}
+                    installing={pluginInstalling === "dingtalk"}
+                  />
+                ) : editing === "wecom" ? (
+                  <WecomEditForm
+                    form={wecomForm}
+                    onChange={setWecomForm}
+                    onSave={handleSave}
+                    onCancel={() => setEditing(null)}
+                    saving={saving}
+                    installing={pluginInstalling === "wecom"}
                   />
                 ) : (
                   <TelegramEditForm
@@ -853,6 +1051,218 @@ function TelegramEditForm({
           size="sm"
           className="h-7 gap-1 text-xs"
           disabled={saving}
+          onClick={onCancel}
+        >
+          <X className="w-3.5 h-3.5" />
+          取消
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DingTalk Edit Form
+// ---------------------------------------------------------------------------
+
+function DingtalkEditForm({
+  form,
+  onChange,
+  onSave,
+  onCancel,
+  saving,
+  installing,
+}: {
+  form: DingtalkFormData;
+  onChange: (f: DingtalkFormData) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+  installing?: boolean;
+}) {
+  const update = (patch: Partial<DingtalkFormData>) =>
+    onChange({ ...form, ...patch });
+
+  const canSave = form.enabled && form.clientId.trim() && form.clientSecret.trim();
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={form.enabled}
+          onCheckedChange={(v) => update({ enabled: v })}
+        />
+        <span className="text-xs text-muted-foreground">
+          {form.enabled ? "已启用" : "已禁用"}
+        </span>
+      </div>
+
+      {form.enabled && (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">Client ID（AppKey）</Label>
+              <Input
+                placeholder="dingxxxxxxxxx"
+                value={form.clientId}
+                onChange={(e) => update({ clientId: e.target.value })}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">Client Secret（AppSecret）</Label>
+              <Input
+                type="password"
+                placeholder="••••••••"
+                value={form.clientSecret}
+                onChange={(e) => update({ clientSecret: e.target.value })}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            在{" "}
+            <a
+              href="https://open-dev.dingtalk.com/"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              钉钉开放平台
+            </a>{" "}
+            创建企业内部应用，获取 AppKey 和 AppSecret。机器人需配置为 Stream 模式。
+          </p>
+        </>
+      )}
+
+      <div className="flex items-center gap-2 pt-1">
+        <Button
+          size="sm"
+          className="h-7 gap-1 text-xs"
+          disabled={saving || installing || (form.enabled && !canSave)}
+          onClick={onSave}
+        >
+          {saving || installing ? (
+            <span className="inline-flex items-center gap-1 text-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {installing ? "安装插件中…" : "保存中…"}
+            </span>
+          ) : (
+            <>
+              <Save className="w-3.5 h-3.5" />
+              保存并重启网关
+            </>
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 text-xs"
+          disabled={saving || installing}
+          onClick={onCancel}
+        >
+          <X className="w-3.5 h-3.5" />
+          取消
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WeCom Edit Form
+// ---------------------------------------------------------------------------
+
+function WecomEditForm({
+  form,
+  onChange,
+  onSave,
+  onCancel,
+  saving,
+  installing,
+}: {
+  form: WecomFormData;
+  onChange: (f: WecomFormData) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+  installing?: boolean;
+}) {
+  const update = (patch: Partial<WecomFormData>) =>
+    onChange({ ...form, ...patch });
+
+  const canSave = form.enabled && form.botId.trim() && form.secret.trim();
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={form.enabled}
+          onCheckedChange={(v) => update({ enabled: v })}
+        />
+        <span className="text-xs text-muted-foreground">
+          {form.enabled ? "已启用" : "已禁用"}
+        </span>
+      </div>
+
+      {form.enabled && (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">Bot ID</Label>
+              <Input
+                placeholder="bot_id"
+                value={form.botId}
+                onChange={(e) => update({ botId: e.target.value })}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">Secret</Label>
+              <Input
+                type="password"
+                placeholder="••••••••"
+                value={form.secret}
+                onChange={(e) => update({ secret: e.target.value })}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            在{" "}
+            <a
+              href="https://developer.work.weixin.qq.com/"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              企业微信开发者平台
+            </a>{" "}
+            创建 AI 机器人，获取 Bot ID 和 Secret。支持 WebSocket 长连接、单聊和群聊。
+          </p>
+        </>
+      )}
+
+      <div className="flex items-center gap-2 pt-1">
+        <Button
+          size="sm"
+          className="h-7 gap-1 text-xs"
+          disabled={saving || installing || (form.enabled && !canSave)}
+          onClick={onSave}
+        >
+          {saving || installing ? (
+            <span className="inline-flex items-center gap-1 text-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {installing ? "安装插件中…" : "保存中…"}
+            </span>
+          ) : (
+            <>
+              <Save className="w-3.5 h-3.5" />
+              保存并重启网关
+            </>
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 text-xs"
+          disabled={saving || installing}
           onClick={onCancel}
         >
           <X className="w-3.5 h-3.5" />
