@@ -1200,9 +1200,49 @@ async fn gateway_open_dashboard_handler() -> Result<Json<serde_json::Value>, (St
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task join: {}", e)))?;
 
     match result {
-        Ok(msg) => Ok(Json(serde_json::json!({ "ok": true, "message": msg }))),
+        Ok(msg) => {
+            // Auto-approve device pairing after opening dashboard in browser
+            tokio::spawn(auto_approve_gateway_pairing_after_startup());
+            Ok(Json(serde_json::json!({ "ok": true, "message": msg })))
+        }
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
     }
+}
+
+async fn auto_approve_gateway_pairing_after_startup() {
+    for attempt in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+        let result = tokio::task::spawn_blocking(move || {
+            let status = gateway::gateway_status();
+            if !status.running {
+                return None;
+            }
+
+            if status.rpc_ok {
+                tracing::info!(attempt, "[device-pairing] Gateway RPC already ready");
+                return Some((0usize, true));
+            }
+
+            let approved = gateway::auto_approve_pending_devices();
+            Some((approved, false))
+        })
+        .await;
+
+        match result {
+            Ok(Some((approved, rpc_ok))) => {
+                tracing::info!(attempt, approved, rpc_ok, "[device-pairing] Post-start auto-approve finished");
+                return;
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(attempt, error = %e, "[device-pairing] Post-start auto-approve task failed");
+                return;
+            }
+        }
+    }
+
+    tracing::warn!("[device-pairing] Gateway did not become ready in time for auto-approve");
 }
 
 /// POST /api/gateway/install — register gateway as system service
@@ -1214,6 +1254,7 @@ async fn gateway_install_handler() -> Result<Json<serde_json::Value>, (StatusCod
     match result {
         Ok(msg) => {
             tracing::info!("Gateway installed");
+            tokio::spawn(auto_approve_gateway_pairing_after_startup());
             Ok(Json(serde_json::json!({ "ok": true, "message": msg })))
         }
         Err(e) => {
@@ -1232,6 +1273,7 @@ async fn gateway_start_handler() -> Result<Json<serde_json::Value>, (StatusCode,
     match result {
         Ok(msg) => {
             tracing::info!("Gateway started");
+            tokio::spawn(auto_approve_gateway_pairing_after_startup());
             Ok(Json(serde_json::json!({ "ok": true, "message": msg })))
         }
         Err(e) => {
@@ -1250,6 +1292,7 @@ async fn gateway_restart_handler() -> Result<Json<serde_json::Value>, (StatusCod
     match result {
         Ok(msg) => {
             tracing::info!("Gateway restarted");
+            tokio::spawn(auto_approve_gateway_pairing_after_startup());
             Ok(Json(serde_json::json!({ "ok": true, "message": msg })))
         }
         Err(e) => {
